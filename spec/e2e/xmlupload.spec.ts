@@ -52,7 +52,7 @@ test.describe('XML e2e tests', () => {
   })
 
   test('should be able to search for a test', async ({ page }) => {
-    await page.getByRole('textbox', { name: 'Search tests...' }).fill('test4')
+    await page.getByRole('textbox', { name: 'Search tests' }).fill('test4')
 
     await expect(page.getByRole('row', { name: 'test4' })).toBeVisible()
 

@@ -32,7 +32,7 @@ test.describe('Progress Page', () => {
 
     await page.getByRole('button', { name: 'Progress' }).click()
 
-    await page.getByRole('textbox', { name: 'Search tests...' }).fill('test3')
+    await page.getByRole('textbox', { name: 'Search tests' }).fill('test3')
 
     await expect(page.getByRole('heading', { name: 'test3' })).toBeVisible()
 

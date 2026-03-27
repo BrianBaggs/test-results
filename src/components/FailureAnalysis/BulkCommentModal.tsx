@@ -124,8 +124,8 @@ export const BulkCommentModal = ({
     setIndividualAssignees((prev) => ({ ...prev, [id]: value }));
   };
 
-  const updateIndividualStatus = (id: string, value: string) => {
-    setIndividualStatuses((prev) => ({ ...prev, [id]: value as StatusValue | '' }));
+  const updateIndividualStatus = (id: string, value: StatusValue | '') => {
+    setIndividualStatuses((prev) => ({ ...prev, [id]: value }));
   };
 
   const hasContent =
@@ -283,7 +283,7 @@ export const BulkCommentModal = ({
                         id={`individual-status-${safeId}`}
                         name={`individualStatus-${safeId}`}
                         value={individualStatuses[item.id] || ''}
-                        onChange={(e) => updateIndividualStatus(item.id, e.target.value)}
+                        onChange={(e) => updateIndividualStatus(item.id, e.target.value as StatusValue | '')}
                         className="w-full px-2 py-1 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm"
                         data-testid={`individual-status-${item.id}`}
                       >
