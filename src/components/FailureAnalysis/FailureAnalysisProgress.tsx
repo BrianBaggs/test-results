@@ -4,6 +4,7 @@ import { TestDetailsModal } from '../Dashboard/TestDetailsModal';
 import { FilterControls } from '../Dashboard/FilterControls';
 import ClearLocalStorageButton from '../Dashboard/ClearLocalStorage';
 import { BulkCommentModal, type BulkCommentResult } from './BulkCommentModal';
+import { FloatingBulkActionsBar } from './FloatingBulkActionsBar';
 import type { TestData, TestCase } from '../../types';
 
 interface FailureProgressItem {
@@ -239,6 +240,10 @@ export const FailureAnalysisProgress: React.FC<FailureAnalysisProgressProps> = (
       // Select all visible tests
       setSelectedTests(new Set(paginatedTests.map(test => test.id)));
     }
+  };
+
+  const clearSelection = () => {
+    setSelectedTests(new Set());
   };
 
   const handleShowStackTrace = (test: FailureProgressItem) => {
@@ -553,5 +558,18 @@ export const FailureAnalysisProgress: React.FC<FailureAnalysisProgressProps> = (
           onClose={() => setShowBulkCommentModal(false)}
         />
       )}
+
+      {/* Floating Bulk Actions Bar */}
+      <FloatingBulkActionsBar
+        selectedCount={selectedTests.size}
+        totalCount={paginatedTests.length}
+        allSelected={paginatedTests.length > 0 && paginatedTests.every(test => selectedTests.has(test.id))}
+        onToggleSelectAll={toggleSelectAll}
+        onMarkPending={() => updateBulkTestStatus(Array.from(selectedTests), 'pending')}
+        onMarkInProgress={() => updateBulkTestStatus(Array.from(selectedTests), 'in_progress')}
+        onMarkComplete={() => updateBulkTestStatus(Array.from(selectedTests), 'completed')}
+        onBulkComment={() => setShowBulkCommentModal(true)}
+        onClearSelection={clearSelection}
+      />
     </div>;
 };

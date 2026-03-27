@@ -125,6 +125,10 @@ vi.mock('../components/Dashboard/FilterControls', () => ({
   ),
 }));
 
+vi.mock('../components/FailureAnalysis/FloatingBulkActionsBar', () => ({
+  FloatingBulkActionsBar: () => <div data-testid="floating-bulk-actions-bar" />,
+}));
+
 describe('FailureAnalysisProgress', () => {
   beforeEach(() => {
     // Clear localStorage before each test
