@@ -113,8 +113,8 @@ export const FailureAnalysisProgress: React.FC<FailureAnalysisProgressProps> = (
         updatedProgress[testId] = {
           ...updatedProgress[testId],
           notes: comment || updatedProgress[testId].notes,
-          assignee: result.assignee || updatedProgress[testId].assignee,
-          status: result.status || updatedProgress[testId].status,
+          assignee: result.assignee ?? updatedProgress[testId].assignee,
+          status: result.status ?? updatedProgress[testId].status,
           updatedAt: new Date().toISOString()
         };
       }

@@ -398,6 +398,27 @@ describe('BulkCommentModal', () => {
         status: 'pending',
       });
     });
+    it('should preserve status and assignee when switching comment modes', async () => {
+      const user = userEvent.setup();
+      render(
+        <BulkCommentModal selectedItems={twoItems} onApply={onApply} onClose={onClose} />,
+      );
+      await user.selectOptions(screen.getByTestId('bulk-status-select'), 'completed');
+      await user.type(screen.getByTestId('bulk-assignee-input'), 'Dev Team');
+      fireEvent.click(screen.getByTestId('mode-individual'));
+      await user.type(screen.getByTestId('individual-comment-Suite-test0'), 'Fix A');
+      fireEvent.click(screen.getByTestId('mode-same'));
+      await user.type(screen.getByTestId('shared-comment-input'), 'Shared note');
+      await user.click(screen.getByTestId('apply-comments-btn'));
+      expect(onApply).toHaveBeenCalledWith({
+        comments: {
+          'Suite-test0': 'Shared note',
+          'Suite-test1': 'Shared note',
+        },
+        assignee: 'Dev Team',
+        status: 'completed',
+      });
+    });
   });
 
   describe('Close modal', () => {
