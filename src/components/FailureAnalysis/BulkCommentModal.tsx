@@ -10,9 +10,15 @@ interface FailureProgressItem {
   assignee?: string;
 }
 
+export interface BulkCommentResult {
+  comments: Record<string, string>;
+  assignee?: string;
+  status?: 'pending' | 'in_progress' | 'completed';
+}
+
 interface BulkCommentModalProps {
   selectedItems: FailureProgressItem[];
-  onApply: (comments: Record<string, string>) => void;
+  onApply: (result: BulkCommentResult) => void;
   onClose: () => void;
 }
 
@@ -25,6 +31,8 @@ export const BulkCommentModal = ({
 }: BulkCommentModalProps) => {
   const [mode, setMode] = useState<CommentMode>('same');
   const [sharedComment, setSharedComment] = useState('');
+  const [bulkAssignee, setBulkAssignee] = useState('');
+  const [bulkStatus, setBulkStatus] = useState<string>('');
   const [individualComments, setIndividualComments] = useState<Record<string, string>>(
     () => {
       const initial: Record<string, string> = {};
@@ -46,7 +54,14 @@ export const BulkCommentModal = ({
         comments[item.id] = individualComments[item.id] || '';
       });
     }
-    onApply(comments);
+    const result: BulkCommentResult = { comments };
+    if (bulkAssignee.trim()) {
+      result.assignee = bulkAssignee.trim();
+    }
+    if (bulkStatus) {
+      result.status = bulkStatus as 'pending' | 'in_progress' | 'completed';
+    }
+    onApply(result);
   };
 
   const updateIndividualComment = (id: string, value: string) => {
@@ -55,8 +70,8 @@ export const BulkCommentModal = ({
 
   const hasContent =
     mode === 'same'
-      ? sharedComment.trim().length > 0
-      : Object.values(individualComments).some((c) => c.trim().length > 0);
+      ? sharedComment.trim().length > 0 || bulkAssignee.trim().length > 0 || bulkStatus !== ''
+      : Object.values(individualComments).some((c) => c.trim().length > 0) || bulkAssignee.trim().length > 0 || bulkStatus !== '';
 
   return (
     <div
@@ -81,8 +96,43 @@ export const BulkCommentModal = ({
           </button>
         </div>
 
+        {/* Status and Assignee */}
+        <div className="px-5 pt-4 pb-2 space-y-3">
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                Status
+              </label>
+              <select
+                value={bulkStatus}
+                onChange={(e) => setBulkStatus(e.target.value)}
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm"
+                data-testid="bulk-status-select"
+              >
+                <option value="">No Change</option>
+                <option value="pending">Pending</option>
+                <option value="in_progress">In Progress</option>
+                <option value="completed">Completed</option>
+              </select>
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                Assignee
+              </label>
+              <input
+                type="text"
+                value={bulkAssignee}
+                onChange={(e) => setBulkAssignee(e.target.value)}
+                placeholder="Who is working on this?"
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm"
+                data-testid="bulk-assignee-input"
+              />
+            </div>
+          </div>
+        </div>
+
         {/* Mode Selector */}
-        <div className="px-5 pt-4 pb-2">
+        <div className="px-5 pt-2 pb-2">
           <div className="flex rounded-lg bg-gray-100 p-1">
             <button
               onClick={() => setMode('same')}

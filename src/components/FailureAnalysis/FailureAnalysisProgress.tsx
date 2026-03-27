@@ -3,7 +3,7 @@ import { CheckCircleIcon, XCircleIcon, ClockIcon, AlertTriangleIcon, MessageSqua
 import { TestDetailsModal } from '../Dashboard/TestDetailsModal';
 import { FilterControls } from '../Dashboard/FilterControls';
 import ClearLocalStorageButton from '../Dashboard/ClearLocalStorage';
-import { BulkCommentModal } from './BulkCommentModal';
+import { BulkCommentModal, type BulkCommentResult } from './BulkCommentModal';
 import type { TestData, TestCase } from '../../types';
 
 interface FailureProgressItem {
@@ -106,13 +106,15 @@ export const FailureAnalysisProgress: React.FC<FailureAnalysisProgressProps> = (
   };
 
   // Bulk comment handler
-  const applyBulkComments = (comments: Record<string, string>) => {
+  const applyBulkComments = (result: BulkCommentResult) => {
     const updatedProgress = { ...progressData };
-    Object.entries(comments).forEach(([testId, comment]) => {
+    Object.entries(result.comments).forEach(([testId, comment]) => {
       if (updatedProgress[testId]) {
         updatedProgress[testId] = {
           ...updatedProgress[testId],
-          notes: comment,
+          notes: comment || updatedProgress[testId].notes,
+          assignee: result.assignee || updatedProgress[testId].assignee,
+          status: result.status || updatedProgress[testId].status,
           updatedAt: new Date().toISOString()
         };
       }
@@ -418,7 +420,11 @@ export const FailureAnalysisProgress: React.FC<FailureAnalysisProgressProps> = (
                       </p>
                     </div>
                   </div>
-                  {selectedTest !== test.id ? <button onClick={() => setSelectedTest(test.id)} className="px-4 py-2 bg-white border border-gray-300 rounded-md hover:bg-gray-50">
+                  {selectedTest !== test.id ? <button onClick={() => {
+                      setSelectedTest(test.id);
+                      setNotes(progressData[test.id]?.notes || '');
+                      setAssignee(progressData[test.id]?.assignee || '');
+                    }} className="px-4 py-2 bg-white border border-gray-300 rounded-md hover:bg-gray-50">
                       Edit
                     </button> : <div className="flex space-x-2">
                       <button onClick={() => updateTestStatus(test.id, 'pending')} className="px-3 py-1 bg-red-100 text-red-700 rounded-md hover:bg-red-200">

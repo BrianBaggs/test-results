@@ -235,8 +235,10 @@ describe('BulkCommentModal', () => {
       await user.type(screen.getByTestId('shared-comment-input'), 'Shared fix');
       await user.click(screen.getByTestId('apply-comments-btn'));
       expect(onApply).toHaveBeenCalledWith({
-        'Suite-test0': 'Shared fix',
-        'Suite-test1': 'Shared fix',
+        comments: {
+          'Suite-test0': 'Shared fix',
+          'Suite-test1': 'Shared fix',
+        },
       });
     });
 
@@ -256,8 +258,10 @@ describe('BulkCommentModal', () => {
 
       await user.click(screen.getByTestId('apply-comments-btn'));
       expect(onApply).toHaveBeenCalledWith({
-        'Suite-test0': 'Fix A',
-        'Suite-test1': 'Fix B',
+        comments: {
+          'Suite-test0': 'Fix A',
+          'Suite-test1': 'Fix B',
+        },
       });
     });
 
@@ -275,8 +279,123 @@ describe('BulkCommentModal', () => {
       await user.type(screen.getByTestId('individual-comment-Suite-test0'), 'Only one');
       await user.click(screen.getByTestId('apply-comments-btn'));
       expect(onApply).toHaveBeenCalledWith({
-        'Suite-test0': 'Only one',
-        'Suite-test1': '',
+        comments: {
+          'Suite-test0': 'Only one',
+          'Suite-test1': '',
+        },
+      });
+    });
+  });
+
+  describe('Assignee field', () => {
+    it('should render the assignee input field', () => {
+      render(
+        <BulkCommentModal selectedItems={twoItems} onApply={onApply} onClose={onClose} />,
+      );
+      expect(screen.getByTestId('bulk-assignee-input')).toBeInTheDocument();
+    });
+
+    it('should include assignee in apply result when set', async () => {
+      const user = userEvent.setup();
+      render(
+        <BulkCommentModal selectedItems={twoItems} onApply={onApply} onClose={onClose} />,
+      );
+      await user.type(screen.getByTestId('shared-comment-input'), 'Fix applied');
+      await user.type(screen.getByTestId('bulk-assignee-input'), 'John Doe');
+      await user.click(screen.getByTestId('apply-comments-btn'));
+      expect(onApply).toHaveBeenCalledWith({
+        comments: {
+          'Suite-test0': 'Fix applied',
+          'Suite-test1': 'Fix applied',
+        },
+        assignee: 'John Doe',
+      });
+    });
+
+    it('should not include assignee in result when empty', async () => {
+      const user = userEvent.setup();
+      render(
+        <BulkCommentModal selectedItems={twoItems} onApply={onApply} onClose={onClose} />,
+      );
+      await user.type(screen.getByTestId('shared-comment-input'), 'Fix applied');
+      await user.click(screen.getByTestId('apply-comments-btn'));
+      expect(onApply).toHaveBeenCalledWith({
+        comments: {
+          'Suite-test0': 'Fix applied',
+          'Suite-test1': 'Fix applied',
+        },
+      });
+    });
+
+    it('should enable Apply button when only assignee is set', async () => {
+      const user = userEvent.setup();
+      render(
+        <BulkCommentModal selectedItems={twoItems} onApply={onApply} onClose={onClose} />,
+      );
+      expect(screen.getByTestId('apply-comments-btn')).toBeDisabled();
+      await user.type(screen.getByTestId('bulk-assignee-input'), 'Jane');
+      expect(screen.getByTestId('apply-comments-btn')).not.toBeDisabled();
+    });
+  });
+
+  describe('Status selector', () => {
+    it('should render the status selector', () => {
+      render(
+        <BulkCommentModal selectedItems={twoItems} onApply={onApply} onClose={onClose} />,
+      );
+      expect(screen.getByTestId('bulk-status-select')).toBeInTheDocument();
+    });
+
+    it('should default to No Change', () => {
+      render(
+        <BulkCommentModal selectedItems={twoItems} onApply={onApply} onClose={onClose} />,
+      );
+      const select = screen.getByTestId('bulk-status-select') as HTMLSelectElement;
+      expect(select.value).toBe('');
+    });
+
+    it('should include status in apply result when selected', async () => {
+      const user = userEvent.setup();
+      render(
+        <BulkCommentModal selectedItems={twoItems} onApply={onApply} onClose={onClose} />,
+      );
+      await user.selectOptions(screen.getByTestId('bulk-status-select'), 'completed');
+      await user.click(screen.getByTestId('apply-comments-btn'));
+      expect(onApply).toHaveBeenCalledWith({
+        comments: {
+          'Suite-test0': '',
+          'Suite-test1': '',
+        },
+        status: 'completed',
+      });
+    });
+
+    it('should enable Apply button when only status is set', async () => {
+      const user = userEvent.setup();
+      render(
+        <BulkCommentModal selectedItems={twoItems} onApply={onApply} onClose={onClose} />,
+      );
+      expect(screen.getByTestId('apply-comments-btn')).toBeDisabled();
+      await user.selectOptions(screen.getByTestId('bulk-status-select'), 'in_progress');
+      expect(screen.getByTestId('apply-comments-btn')).not.toBeDisabled();
+    });
+
+    it('should include both status and assignee in result', async () => {
+      const user = userEvent.setup();
+      render(
+        <BulkCommentModal selectedItems={twoItems} onApply={onApply} onClose={onClose} />,
+      );
+      await user.selectOptions(screen.getByTestId('bulk-status-select'), 'pending');
+      await user.type(screen.getByTestId('bulk-assignee-input'), 'Team Lead');
+      await user.type(screen.getByTestId('shared-comment-input'), 'Investigating');
+      await user.click(screen.getByTestId('apply-comments-btn'));
+      expect(onApply).toHaveBeenCalledWith({
+        comments: {
+          'Suite-test0': 'Investigating',
+          'Suite-test1': 'Investigating',
+        },
+        assignee: 'Team Lead',
+        status: 'pending',
       });
     });
   });
