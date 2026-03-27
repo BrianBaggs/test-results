@@ -90,7 +90,7 @@ test.describe('Floating Bulk Actions Bar', () => {
     await page.getByTestId('floating-mark-pending').click()
 
     await expect(page.getByTestId('floating-bulk-actions-bar')).toBeHidden()
-    await expect(page.locator('.text-red-500')).toHaveCount(2)
+    await expect(page.locator('.text-red-500')).toHaveCount(4)
   })
 
   test('should open bulk comment modal via floating bar', async ({ page }) => {
@@ -123,7 +123,7 @@ test.describe('Floating Bulk Actions Bar', () => {
     await page.getByTestId('floating-select-all').check()
 
     // All items should now be selected - the top bar reflects it
-    await expect(page.getByRole('checkbox', { name: 'Select All (2 selected)' })).toBeVisible()
-    await expect(page.getByTestId('floating-selected-count')).toHaveText('2 selected')
+    await expect(page.getByRole('checkbox', { name: 'Select All (4 selected)' })).toBeVisible()
+    await expect(page.getByTestId('floating-selected-count')).toHaveText('4 selected')
   })
 })

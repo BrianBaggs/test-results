@@ -26,7 +26,7 @@ test.describe('Progress Bulk Actions', () => {
 
     await expect(page.getByRole('checkbox', { name: 'Select All (2 selected)' })).toBeVisible()
 
-    await page.getByRole('button', { name: 'Mark as Complete' }).click()
+    await page.getByRole('button', { name: 'Mark as Complete' }).first().click()
 
     await expect(page.getByRole('checkbox', { name: 'Select All (0 selected)' })).toBeVisible()
 
@@ -44,7 +44,7 @@ test.describe('Progress Bulk Actions', () => {
 
     await expect(page.getByRole('checkbox', { name: 'Select All (2 selected)' })).toBeVisible()
 
-    await page.getByRole('button', { name: 'Mark as In Progress' }).click()
+    await page.getByRole('button', { name: 'Mark as In Progress' }).first().click()
 
     await expect(page.getByRole('checkbox', { name: 'Select All (0 selected)' })).toBeVisible()
 
