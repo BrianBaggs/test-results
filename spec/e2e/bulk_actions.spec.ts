@@ -66,9 +66,9 @@ test.describe('Progress Bulk Actions', () => {
 
     await expect(page.getByTestId('mode-same')).toBeEnabled()
 
-    await page.getByTestId('bulk-comment-modal').getByRole('textbox').first().fill('John Doe')
+    await page.getByTestId('bulk-assignee-input').fill('John Doe')
 
-    await page.getByTestId('bulk-comment-modal').getByRole('textbox').last().fill('This is a bulk comment.')
+    await page.getByTestId('shared-comment-input').fill('This is a bulk comment.')
 
     await page.getByTestId('bulk-comment-modal').getByRole('button', { name: 'Apply Comments' }).click()
 
