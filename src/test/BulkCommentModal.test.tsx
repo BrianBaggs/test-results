@@ -605,5 +605,58 @@ describe('BulkCommentModal', () => {
       expect(textarea).toHaveAttribute('id', 'individual-comment-input-Suite-test0');
       expect(textarea).toHaveAttribute('name', 'individualComment-Suite-test0');
     });
+
+    it('should sanitize ids with spaces for HTML attributes', () => {
+      const itemsWithSpaces = [
+        { id: 'Suite A-test 1', name: 'test 1', suite: 'Suite A', status: 'pending' as const, notes: '', assignee: '' },
+      ];
+      render(
+        <BulkCommentModal selectedItems={itemsWithSpaces} onApply={onApply} onClose={onClose} />,
+      );
+      fireEvent.click(screen.getByTestId('mode-individual'));
+      const textarea = screen.getByTestId('individual-comment-Suite A-test 1');
+      expect(textarea).toHaveAttribute('id', 'individual-comment-input-Suite_A-test_1');
+      expect(textarea).toHaveAttribute('name', 'individualComment-Suite_A-test_1');
+      const statusSelect = screen.getByTestId('individual-status-Suite A-test 1');
+      expect(statusSelect).toHaveAttribute('id', 'individual-status-Suite_A-test_1');
+      const assigneeInput = screen.getByTestId('individual-assignee-Suite A-test 1');
+      expect(assigneeInput).toHaveAttribute('id', 'individual-assignee-Suite_A-test_1');
+    });
+  });
+
+  describe('Comment trimming', () => {
+    it('should trim whitespace-only shared comments', async () => {
+      const user = userEvent.setup();
+      render(
+        <BulkCommentModal selectedItems={twoItems} onApply={onApply} onClose={onClose} />,
+      );
+      await user.selectOptions(screen.getByTestId('bulk-status-select'), 'completed');
+      await user.type(screen.getByTestId('shared-comment-input'), '   ');
+      await user.click(screen.getByTestId('apply-comments-btn'));
+      expect(onApply).toHaveBeenCalledWith({
+        comments: {
+          'Suite-test0': '',
+          'Suite-test1': '',
+        },
+        status: 'completed',
+      });
+    });
+
+    it('should trim whitespace-only individual comments', async () => {
+      const user = userEvent.setup();
+      const items = [
+        { ...twoItems[0], notes: '' },
+        { ...twoItems[1], notes: '' },
+      ];
+      render(
+        <BulkCommentModal selectedItems={items} onApply={onApply} onClose={onClose} />,
+      );
+      fireEvent.click(screen.getByTestId('mode-individual'));
+      await user.selectOptions(screen.getByTestId('individual-status-Suite-test0'), 'in_progress');
+      await user.type(screen.getByTestId('individual-comment-Suite-test0'), '   ');
+      await user.click(screen.getByTestId('apply-comments-btn'));
+      const result = onApply.mock.calls[0][0];
+      expect(result.comments['Suite-test0']).toBe('');
+    });
   });
 });

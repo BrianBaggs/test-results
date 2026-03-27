@@ -37,7 +37,7 @@ export const FilterControls = ({
         <div className="flex flex-col md:flex-row space-y-4 md:space-y-0 md:space-x-4">
           <div className="relative">
             <SearchIcon className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 w-5 h-5" />
-            <label htmlFor="search-tests" className="sr-only">Search tests</label>
+            <label htmlFor="search-tests" className="sr-only">Search tests...</label>
             <input id="search-tests" name="searchTests" type="text" placeholder="Search tests..." className="pl-10 pr-4 py-2 border border-gray-300 rounded-md w-full md:w-64" value={searchTerm} onChange={e => setSearchTerm(e.target.value)} />
           </div>
           <div className="flex space-x-2">

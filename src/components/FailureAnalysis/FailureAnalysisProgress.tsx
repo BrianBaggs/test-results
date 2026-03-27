@@ -404,13 +404,15 @@ export const FailureAnalysisProgress: React.FC<FailureAnalysisProgressProps> = (
 
         {/* Failed Tests List */}
         <div className="space-y-4">
-          {paginatedTests.map(test => <div key={test.id} className={`border rounded-lg overflow-hidden ${getStatusColor(test.status)}`}>
+          {paginatedTests.map(test => {
+            const safeId = test.id.replace(/\s+/g, '_');
+            return <div key={test.id} className={`border rounded-lg overflow-hidden ${getStatusColor(test.status)}`}>
               <div className="p-4">
                 <div className="flex items-center justify-between">
                   <div className="flex items-center space-x-3">
                     <input
-                      id={`select-test-${test.id}`}
-                      name={`selectTest-${test.id}`}
+                      id={`select-test-${safeId}`}
+                      name={`selectTest-${safeId}`}
                       type="checkbox"
                       checked={selectedTests.has(test.id)}
                       onChange={() => toggleTestSelection(test.id)}
@@ -453,16 +455,16 @@ export const FailureAnalysisProgress: React.FC<FailureAnalysisProgressProps> = (
                 </div>
                 {selectedTest === test.id && <div className="mt-4 space-y-4">
                     <div>
-                      <label htmlFor={`assignee-${test.id}`} className="block text-sm font-medium text-gray-700 mb-1">
+                      <label htmlFor={`assignee-${safeId}`} className="block text-sm font-medium text-gray-700 mb-1">
                         Assignee
                       </label>
-                      <input id={`assignee-${test.id}`} name={`assignee-${test.id}`} type="text" value={assignee} onChange={e => setAssignee(e.target.value)} placeholder="Who is working on this?" className="w-full px-3 py-2 border border-gray-300 rounded-md" />
+                      <input id={`assignee-${safeId}`} name={`assignee-${safeId}`} type="text" value={assignee} onChange={e => setAssignee(e.target.value)} placeholder="Who is working on this?" className="w-full px-3 py-2 border border-gray-300 rounded-md" />
                     </div>
                     <div>
-                      <label htmlFor={`notes-${test.id}`} className="block text-sm font-medium text-gray-700 mb-1">
+                      <label htmlFor={`notes-${safeId}`} className="block text-sm font-medium text-gray-700 mb-1">
                         Notes
                       </label>
-                      <textarea id={`notes-${test.id}`} name={`notes-${test.id}`} value={notes} onChange={e => setNotes(e.target.value)} placeholder="Add any notes about the fix..." className="w-full px-3 py-2 border border-gray-300 rounded-md" rows={3} />
+                      <textarea id={`notes-${safeId}`} name={`notes-${safeId}`} value={notes} onChange={e => setNotes(e.target.value)} placeholder="Add any notes about the fix..." className="w-full px-3 py-2 border border-gray-300 rounded-md" rows={3} />
                     </div>
                   </div>}
                 {!selectedTest && test.notes && <div className="mt-2 text-sm text-gray-600">
@@ -478,7 +480,7 @@ export const FailureAnalysisProgress: React.FC<FailureAnalysisProgressProps> = (
                     </p>
                   </div>}
               </div>
-            </div>)}
+            </div>})}
         </div>
 
         {/* Pagination Controls */}

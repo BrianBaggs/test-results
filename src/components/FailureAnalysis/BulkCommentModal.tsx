@@ -1,11 +1,13 @@
 import { useState } from 'react';
 import { XIcon, MessageSquareIcon } from 'lucide-react';
 
+type StatusValue = 'pending' | 'in_progress' | 'completed';
+
 interface FailureProgressItem {
   id: string;
   name: string;
   suite: string;
-  status: 'pending' | 'in_progress' | 'completed';
+  status: StatusValue;
   notes?: string;
   assignee?: string;
 }
@@ -13,9 +15,9 @@ interface FailureProgressItem {
 export interface BulkCommentResult {
   comments: Record<string, string>;
   assignee?: string;
-  status?: 'pending' | 'in_progress' | 'completed';
+  status?: StatusValue;
   individualAssignees?: Record<string, string>;
-  individualStatuses?: Record<string, 'pending' | 'in_progress' | 'completed'>;
+  individualStatuses?: Record<string, StatusValue>;
 }
 
 interface BulkCommentModalProps {
@@ -26,6 +28,9 @@ interface BulkCommentModalProps {
 
 type CommentMode = 'same' | 'individual';
 
+/** Replace whitespace with underscores to produce a valid HTML id/name value. */
+const sanitizeId = (id: string) => id.replace(/\s+/g, '_');
+
 export const BulkCommentModal = ({
   selectedItems,
   onApply,
@@ -34,7 +39,7 @@ export const BulkCommentModal = ({
   const [mode, setMode] = useState<CommentMode>('same');
   const [sharedComment, setSharedComment] = useState('');
   const [bulkAssignee, setBulkAssignee] = useState('');
-  const [bulkStatus, setBulkStatus] = useState<string>('');
+  const [bulkStatus, setBulkStatus] = useState<StatusValue | ''>('');
   const [individualComments, setIndividualComments] = useState<Record<string, string>>(
     () => {
       const initial: Record<string, string> = {};
@@ -53,9 +58,9 @@ export const BulkCommentModal = ({
       return initial;
     },
   );
-  const [individualStatuses, setIndividualStatuses] = useState<Record<string, string>>(
+  const [individualStatuses, setIndividualStatuses] = useState<Record<string, StatusValue | ''>>(
     () => {
-      const initial: Record<string, string> = {};
+      const initial: Record<string, StatusValue | ''> = {};
       selectedItems.forEach((item) => {
         initial[item.id] = '';
       });
@@ -66,12 +71,13 @@ export const BulkCommentModal = ({
   const handleApply = () => {
     const comments: Record<string, string> = {};
     if (mode === 'same') {
+      const trimmed = sharedComment.trim();
       selectedItems.forEach((item) => {
-        comments[item.id] = sharedComment;
+        comments[item.id] = trimmed;
       });
     } else {
       selectedItems.forEach((item) => {
-        comments[item.id] = individualComments[item.id] || '';
+        comments[item.id] = (individualComments[item.id] || '').trim();
       });
     }
     const result: BulkCommentResult = { comments };
@@ -80,12 +86,12 @@ export const BulkCommentModal = ({
         result.assignee = bulkAssignee.trim();
       }
       if (bulkStatus) {
-        result.status = bulkStatus as 'pending' | 'in_progress' | 'completed';
+        result.status = bulkStatus;
       }
     } else {
       // Individual mode: collect per-item assignees and statuses
       const assignees: Record<string, string> = {};
-      const statuses: Record<string, 'pending' | 'in_progress' | 'completed'> = {};
+      const statuses: Record<string, StatusValue> = {};
       let hasAssignees = false;
       let hasStatuses = false;
       selectedItems.forEach((item) => {
@@ -96,7 +102,7 @@ export const BulkCommentModal = ({
         }
         const status = individualStatuses[item.id];
         if (status) {
-          statuses[item.id] = status as 'pending' | 'in_progress' | 'completed';
+          statuses[item.id] = status;
           hasStatuses = true;
         }
       });
@@ -119,7 +125,7 @@ export const BulkCommentModal = ({
   };
 
   const updateIndividualStatus = (id: string, value: string) => {
-    setIndividualStatuses((prev) => ({ ...prev, [id]: value }));
+    setIndividualStatuses((prev) => ({ ...prev, [id]: value as StatusValue | '' }));
   };
 
   const hasContent =
@@ -164,7 +170,7 @@ export const BulkCommentModal = ({
                   id="bulk-status"
                   name="bulkStatus"
                   value={bulkStatus}
-                  onChange={(e) => setBulkStatus(e.target.value)}
+                  onChange={(e) => setBulkStatus(e.target.value as StatusValue | '')}
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm"
                   data-testid="bulk-status-select"
                 >
@@ -245,7 +251,9 @@ export const BulkCommentModal = ({
             </div>
           ) : (
             <div className="space-y-4">
-              {selectedItems.map((item) => (
+              {selectedItems.map((item) => {
+                const safeId = sanitizeId(item.id);
+                return (
                 <div
                   key={item.id}
                   className="border border-gray-200 rounded-lg p-3"
@@ -268,12 +276,12 @@ export const BulkCommentModal = ({
                   </div>
                   <div className="grid grid-cols-2 gap-2 mb-2">
                     <div>
-                      <label htmlFor={`individual-status-${item.id}`} className="block text-xs font-medium text-gray-600 mb-1">
+                      <label htmlFor={`individual-status-${safeId}`} className="block text-xs font-medium text-gray-600 mb-1">
                         Status
                       </label>
                       <select
-                        id={`individual-status-${item.id}`}
-                        name={`individualStatus-${item.id}`}
+                        id={`individual-status-${safeId}`}
+                        name={`individualStatus-${safeId}`}
                         value={individualStatuses[item.id] || ''}
                         onChange={(e) => updateIndividualStatus(item.id, e.target.value)}
                         className="w-full px-2 py-1 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm"
@@ -286,12 +294,12 @@ export const BulkCommentModal = ({
                       </select>
                     </div>
                     <div>
-                      <label htmlFor={`individual-assignee-${item.id}`} className="block text-xs font-medium text-gray-600 mb-1">
+                      <label htmlFor={`individual-assignee-${safeId}`} className="block text-xs font-medium text-gray-600 mb-1">
                         Assignee
                       </label>
                       <input
-                        id={`individual-assignee-${item.id}`}
-                        name={`individualAssignee-${item.id}`}
+                        id={`individual-assignee-${safeId}`}
+                        name={`individualAssignee-${safeId}`}
                         type="text"
                         value={individualAssignees[item.id] || ''}
                         onChange={(e) => updateIndividualAssignee(item.id, e.target.value)}
@@ -301,12 +309,12 @@ export const BulkCommentModal = ({
                       />
                     </div>
                   </div>
-                  <label htmlFor={`individual-comment-input-${item.id}`} className="block text-xs font-medium text-gray-600 mb-1">
+                  <label htmlFor={`individual-comment-input-${safeId}`} className="block text-xs font-medium text-gray-600 mb-1">
                     Notes
                   </label>
                   <textarea
-                    id={`individual-comment-input-${item.id}`}
-                    name={`individualComment-${item.id}`}
+                    id={`individual-comment-input-${safeId}`}
+                    name={`individualComment-${safeId}`}
                     value={individualComments[item.id] || ''}
                     onChange={(e) => updateIndividualComment(item.id, e.target.value)}
                     placeholder="Enter comment for this test..."
@@ -315,7 +323,8 @@ export const BulkCommentModal = ({
                     data-testid={`individual-comment-${item.id}`}
                   />
                 </div>
-              ))}
+                );
+              })}
             </div>
           )}
         </div>
