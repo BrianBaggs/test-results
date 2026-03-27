@@ -438,4 +438,172 @@ describe('BulkCommentModal', () => {
       expect(onClose).toHaveBeenCalled();
     });
   });
+
+  describe('Individual status and assignee', () => {
+    it('should render individual status dropdowns in individual mode', () => {
+      render(
+        <BulkCommentModal selectedItems={twoItems} onApply={onApply} onClose={onClose} />,
+      );
+      fireEvent.click(screen.getByTestId('mode-individual'));
+      expect(screen.getByTestId('individual-status-Suite-test0')).toBeInTheDocument();
+      expect(screen.getByTestId('individual-status-Suite-test1')).toBeInTheDocument();
+    });
+
+    it('should render individual assignee inputs in individual mode', () => {
+      render(
+        <BulkCommentModal selectedItems={twoItems} onApply={onApply} onClose={onClose} />,
+      );
+      fireEvent.click(screen.getByTestId('mode-individual'));
+      expect(screen.getByTestId('individual-assignee-Suite-test0')).toBeInTheDocument();
+      expect(screen.getByTestId('individual-assignee-Suite-test1')).toBeInTheDocument();
+    });
+
+    it('should include individual statuses in apply result', async () => {
+      const user = userEvent.setup();
+      render(
+        <BulkCommentModal selectedItems={twoItems} onApply={onApply} onClose={onClose} />,
+      );
+      fireEvent.click(screen.getByTestId('mode-individual'));
+      await user.selectOptions(screen.getByTestId('individual-status-Suite-test0'), 'completed');
+      await user.selectOptions(screen.getByTestId('individual-status-Suite-test1'), 'in_progress');
+      await user.click(screen.getByTestId('apply-comments-btn'));
+      expect(onApply).toHaveBeenCalledWith({
+        comments: {
+          'Suite-test0': 'existing note',
+          'Suite-test1': '',
+        },
+        individualStatuses: {
+          'Suite-test0': 'completed',
+          'Suite-test1': 'in_progress',
+        },
+      });
+    });
+
+    it('should include individual assignees in apply result', async () => {
+      const user = userEvent.setup();
+      render(
+        <BulkCommentModal selectedItems={twoItems} onApply={onApply} onClose={onClose} />,
+      );
+      fireEvent.click(screen.getByTestId('mode-individual'));
+      await user.type(screen.getByTestId('individual-assignee-Suite-test0'), 'Alice');
+      await user.type(screen.getByTestId('individual-assignee-Suite-test1'), 'Bob');
+      await user.click(screen.getByTestId('apply-comments-btn'));
+      expect(onApply).toHaveBeenCalledWith({
+        comments: {
+          'Suite-test0': 'existing note',
+          'Suite-test1': '',
+        },
+        individualAssignees: {
+          'Suite-test0': 'Alice',
+          'Suite-test1': 'Bob',
+        },
+      });
+    });
+
+    it('should enable Apply button when only individual assignee is set', async () => {
+      const user = userEvent.setup();
+      const items = [
+        { ...twoItems[0], notes: '' },
+        { ...twoItems[1], notes: '' },
+      ];
+      render(
+        <BulkCommentModal selectedItems={items} onApply={onApply} onClose={onClose} />,
+      );
+      fireEvent.click(screen.getByTestId('mode-individual'));
+      expect(screen.getByTestId('apply-comments-btn')).toBeDisabled();
+      await user.type(screen.getByTestId('individual-assignee-Suite-test0'), 'Alice');
+      expect(screen.getByTestId('apply-comments-btn')).not.toBeDisabled();
+    });
+
+    it('should enable Apply button when only individual status is set', async () => {
+      const user = userEvent.setup();
+      const items = [
+        { ...twoItems[0], notes: '' },
+        { ...twoItems[1], notes: '' },
+      ];
+      render(
+        <BulkCommentModal selectedItems={items} onApply={onApply} onClose={onClose} />,
+      );
+      fireEvent.click(screen.getByTestId('mode-individual'));
+      expect(screen.getByTestId('apply-comments-btn')).toBeDisabled();
+      await user.selectOptions(screen.getByTestId('individual-status-Suite-test0'), 'completed');
+      expect(screen.getByTestId('apply-comments-btn')).not.toBeDisabled();
+    });
+
+    it('should not include empty individual assignees or statuses', async () => {
+      const user = userEvent.setup();
+      render(
+        <BulkCommentModal selectedItems={twoItems} onApply={onApply} onClose={onClose} />,
+      );
+      fireEvent.click(screen.getByTestId('mode-individual'));
+      await user.type(screen.getByTestId('individual-assignee-Suite-test0'), 'Alice');
+      await user.click(screen.getByTestId('apply-comments-btn'));
+      const result = onApply.mock.calls[0][0];
+      expect(result.individualAssignees).toEqual({ 'Suite-test0': 'Alice' });
+      expect(result.individualStatuses).toBeUndefined();
+    });
+
+    it('should pre-fill existing assignees in individual mode', () => {
+      const items = [
+        { ...twoItems[0], assignee: 'Existing Person' },
+        { ...twoItems[1], assignee: '' },
+      ];
+      render(
+        <BulkCommentModal selectedItems={items} onApply={onApply} onClose={onClose} />,
+      );
+      fireEvent.click(screen.getByTestId('mode-individual'));
+      const assignee0 = screen.getByTestId('individual-assignee-Suite-test0') as HTMLInputElement;
+      expect(assignee0.value).toBe('Existing Person');
+    });
+
+    it('should hide bulk status and assignee when in individual mode', () => {
+      render(
+        <BulkCommentModal selectedItems={twoItems} onApply={onApply} onClose={onClose} />,
+      );
+      expect(screen.getByTestId('bulk-status-select')).toBeInTheDocument();
+      expect(screen.getByTestId('bulk-assignee-input')).toBeInTheDocument();
+      fireEvent.click(screen.getByTestId('mode-individual'));
+      expect(screen.queryByTestId('bulk-status-select')).not.toBeInTheDocument();
+      expect(screen.queryByTestId('bulk-assignee-input')).not.toBeInTheDocument();
+    });
+  });
+
+  describe('Form field accessibility', () => {
+    it('should have id and name attributes on bulk status select', () => {
+      render(
+        <BulkCommentModal selectedItems={twoItems} onApply={onApply} onClose={onClose} />,
+      );
+      const select = screen.getByTestId('bulk-status-select');
+      expect(select).toHaveAttribute('id', 'bulk-status');
+      expect(select).toHaveAttribute('name', 'bulkStatus');
+    });
+
+    it('should have id and name attributes on bulk assignee input', () => {
+      render(
+        <BulkCommentModal selectedItems={twoItems} onApply={onApply} onClose={onClose} />,
+      );
+      const input = screen.getByTestId('bulk-assignee-input');
+      expect(input).toHaveAttribute('id', 'bulk-assignee');
+      expect(input).toHaveAttribute('name', 'bulkAssignee');
+    });
+
+    it('should have id and name attributes on shared comment textarea', () => {
+      render(
+        <BulkCommentModal selectedItems={twoItems} onApply={onApply} onClose={onClose} />,
+      );
+      const textarea = screen.getByTestId('shared-comment-input');
+      expect(textarea).toHaveAttribute('id', 'shared-comment');
+      expect(textarea).toHaveAttribute('name', 'sharedComment');
+    });
+
+    it('should have id and name attributes on individual comment textareas', () => {
+      render(
+        <BulkCommentModal selectedItems={twoItems} onApply={onApply} onClose={onClose} />,
+      );
+      fireEvent.click(screen.getByTestId('mode-individual'));
+      const textarea = screen.getByTestId('individual-comment-Suite-test0');
+      expect(textarea).toHaveAttribute('id', 'individual-comment-input-Suite-test0');
+      expect(textarea).toHaveAttribute('name', 'individualComment-Suite-test0');
+    });
+  });
 });

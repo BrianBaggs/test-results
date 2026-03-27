@@ -21,7 +21,7 @@ export const FileUploader: React.FC<FileUploaderProps> = ({
     }
   };
   return <div className="flex flex-col items-center justify-center p-6 border-2 border-dashed border-gray-300 rounded-lg bg-gray-50">
-      <input type="file" ref={fileInputRef} onChange={handleFileChange} accept=".xml" className="hidden" />
+      <input id="file-upload" name="fileUpload" type="file" ref={fileInputRef} onChange={handleFileChange} accept=".xml" className="hidden" aria-label="Upload XML file" />
       {isLoading ? <div className="flex flex-col items-center text-gray-500">
           <LoaderIcon className="w-12 h-12 animate-spin mb-4" />
           <p>Processing your file...</p>

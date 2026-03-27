@@ -14,6 +14,8 @@ export interface BulkCommentResult {
   comments: Record<string, string>;
   assignee?: string;
   status?: 'pending' | 'in_progress' | 'completed';
+  individualAssignees?: Record<string, string>;
+  individualStatuses?: Record<string, 'pending' | 'in_progress' | 'completed'>;
 }
 
 interface BulkCommentModalProps {
@@ -42,6 +44,24 @@ export const BulkCommentModal = ({
       return initial;
     },
   );
+  const [individualAssignees, setIndividualAssignees] = useState<Record<string, string>>(
+    () => {
+      const initial: Record<string, string> = {};
+      selectedItems.forEach((item) => {
+        initial[item.id] = item.assignee || '';
+      });
+      return initial;
+    },
+  );
+  const [individualStatuses, setIndividualStatuses] = useState<Record<string, string>>(
+    () => {
+      const initial: Record<string, string> = {};
+      selectedItems.forEach((item) => {
+        initial[item.id] = '';
+      });
+      return initial;
+    },
+  );
 
   const handleApply = () => {
     const comments: Record<string, string> = {};
@@ -55,11 +75,37 @@ export const BulkCommentModal = ({
       });
     }
     const result: BulkCommentResult = { comments };
-    if (bulkAssignee.trim()) {
-      result.assignee = bulkAssignee.trim();
-    }
-    if (bulkStatus) {
-      result.status = bulkStatus as 'pending' | 'in_progress' | 'completed';
+    if (mode === 'same') {
+      if (bulkAssignee.trim()) {
+        result.assignee = bulkAssignee.trim();
+      }
+      if (bulkStatus) {
+        result.status = bulkStatus as 'pending' | 'in_progress' | 'completed';
+      }
+    } else {
+      // Individual mode: collect per-item assignees and statuses
+      const assignees: Record<string, string> = {};
+      const statuses: Record<string, 'pending' | 'in_progress' | 'completed'> = {};
+      let hasAssignees = false;
+      let hasStatuses = false;
+      selectedItems.forEach((item) => {
+        const assignee = individualAssignees[item.id]?.trim();
+        if (assignee) {
+          assignees[item.id] = assignee;
+          hasAssignees = true;
+        }
+        const status = individualStatuses[item.id];
+        if (status) {
+          statuses[item.id] = status as 'pending' | 'in_progress' | 'completed';
+          hasStatuses = true;
+        }
+      });
+      if (hasAssignees) {
+        result.individualAssignees = assignees;
+      }
+      if (hasStatuses) {
+        result.individualStatuses = statuses;
+      }
     }
     onApply(result);
   };
@@ -68,10 +114,20 @@ export const BulkCommentModal = ({
     setIndividualComments((prev) => ({ ...prev, [id]: value }));
   };
 
+  const updateIndividualAssignee = (id: string, value: string) => {
+    setIndividualAssignees((prev) => ({ ...prev, [id]: value }));
+  };
+
+  const updateIndividualStatus = (id: string, value: string) => {
+    setIndividualStatuses((prev) => ({ ...prev, [id]: value }));
+  };
+
   const hasContent =
     mode === 'same'
       ? sharedComment.trim().length > 0 || bulkAssignee.trim().length > 0 || bulkStatus !== ''
-      : Object.values(individualComments).some((c) => c.trim().length > 0) || bulkAssignee.trim().length > 0 || bulkStatus !== '';
+      : Object.values(individualComments).some((c) => c.trim().length > 0) ||
+        Object.values(individualAssignees).some((a) => a.trim().length > 0) ||
+        Object.values(individualStatuses).some((s) => s !== '');
 
   return (
     <div
@@ -96,40 +152,46 @@ export const BulkCommentModal = ({
           </button>
         </div>
 
-        {/* Status and Assignee */}
-        <div className="px-5 pt-4 pb-2 space-y-3">
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">
-                Status
-              </label>
-              <select
-                value={bulkStatus}
-                onChange={(e) => setBulkStatus(e.target.value)}
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm"
-                data-testid="bulk-status-select"
-              >
-                <option value="">No Change</option>
-                <option value="pending">Pending</option>
-                <option value="in_progress">In Progress</option>
-                <option value="completed">Completed</option>
-              </select>
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">
-                Assignee
-              </label>
-              <input
-                type="text"
-                value={bulkAssignee}
-                onChange={(e) => setBulkAssignee(e.target.value)}
-                placeholder="Who is working on this?"
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm"
-                data-testid="bulk-assignee-input"
-              />
+        {/* Status and Assignee - shown only in "same" mode */}
+        {mode === 'same' && (
+          <div className="px-5 pt-4 pb-2 space-y-3">
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label htmlFor="bulk-status" className="block text-sm font-medium text-gray-700 mb-1">
+                  Status
+                </label>
+                <select
+                  id="bulk-status"
+                  name="bulkStatus"
+                  value={bulkStatus}
+                  onChange={(e) => setBulkStatus(e.target.value)}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm"
+                  data-testid="bulk-status-select"
+                >
+                  <option value="">No Change</option>
+                  <option value="pending">Pending</option>
+                  <option value="in_progress">In Progress</option>
+                  <option value="completed">Completed</option>
+                </select>
+              </div>
+              <div>
+                <label htmlFor="bulk-assignee" className="block text-sm font-medium text-gray-700 mb-1">
+                  Assignee
+                </label>
+                <input
+                  id="bulk-assignee"
+                  name="bulkAssignee"
+                  type="text"
+                  value={bulkAssignee}
+                  onChange={(e) => setBulkAssignee(e.target.value)}
+                  placeholder="Who is working on this?"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm"
+                  data-testid="bulk-assignee-input"
+                />
+              </div>
             </div>
           </div>
-        </div>
+        )}
 
         {/* Mode Selector */}
         <div className="px-5 pt-2 pb-2">
@@ -163,10 +225,12 @@ export const BulkCommentModal = ({
         <div className="flex-1 overflow-y-auto px-5 py-3">
           {mode === 'same' ? (
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">
+              <label htmlFor="shared-comment" className="block text-sm font-medium text-gray-700 mb-2">
                 Comment for all selected items
               </label>
               <textarea
+                id="shared-comment"
+                name="sharedComment"
                 value={sharedComment}
                 onChange={(e) => setSharedComment(e.target.value)}
                 placeholder="Enter a comment to apply to all selected failures..."
@@ -202,7 +266,47 @@ export const BulkCommentModal = ({
                     </span>
                     <span className="text-xs text-gray-500 truncate">— {item.suite}</span>
                   </div>
+                  <div className="grid grid-cols-2 gap-2 mb-2">
+                    <div>
+                      <label htmlFor={`individual-status-${item.id}`} className="block text-xs font-medium text-gray-600 mb-1">
+                        Status
+                      </label>
+                      <select
+                        id={`individual-status-${item.id}`}
+                        name={`individualStatus-${item.id}`}
+                        value={individualStatuses[item.id] || ''}
+                        onChange={(e) => updateIndividualStatus(item.id, e.target.value)}
+                        className="w-full px-2 py-1 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm"
+                        data-testid={`individual-status-${item.id}`}
+                      >
+                        <option value="">No Change</option>
+                        <option value="pending">Pending</option>
+                        <option value="in_progress">In Progress</option>
+                        <option value="completed">Completed</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label htmlFor={`individual-assignee-${item.id}`} className="block text-xs font-medium text-gray-600 mb-1">
+                        Assignee
+                      </label>
+                      <input
+                        id={`individual-assignee-${item.id}`}
+                        name={`individualAssignee-${item.id}`}
+                        type="text"
+                        value={individualAssignees[item.id] || ''}
+                        onChange={(e) => updateIndividualAssignee(item.id, e.target.value)}
+                        placeholder="Assignee..."
+                        className="w-full px-2 py-1 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm"
+                        data-testid={`individual-assignee-${item.id}`}
+                      />
+                    </div>
+                  </div>
+                  <label htmlFor={`individual-comment-input-${item.id}`} className="block text-xs font-medium text-gray-600 mb-1">
+                    Notes
+                  </label>
                   <textarea
+                    id={`individual-comment-input-${item.id}`}
+                    name={`individualComment-${item.id}`}
                     value={individualComments[item.id] || ''}
                     onChange={(e) => updateIndividualComment(item.id, e.target.value)}
                     placeholder="Enter comment for this test..."
