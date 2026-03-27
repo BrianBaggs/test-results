@@ -62,9 +62,13 @@ test.describe('Progress Bulk Actions', () => {
 
     await expect(page.getByRole('checkbox', { name: 'Select All (2 selected)' })).toBeVisible()
 
-    await page.getByRole('button', { name: 'Bulk Comment' }).click()
+    await page.getByTestId('bulk-comment-btn').click()
 
-    await page.getByTestId('bulk-comment-modal').getByRole('textbox').fill('This is a bulk comment.')
+    await expect(page.getByTestId('mode-same')).toBeEnabled()
+
+    await page.getByTestId('bulk-comment-modal').getByRole('textbox').first().fill('John Doe')
+
+    await page.getByTestId('bulk-comment-modal').getByRole('textbox').last().fill('This is a bulk comment.')
 
     await page.getByTestId('bulk-comment-modal').getByRole('button', { name: 'Apply Comments' }).click()
 
