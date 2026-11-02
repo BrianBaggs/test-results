@@ -55,9 +55,7 @@ test.describe('Combine split E2E Tests', () => {
       page.getByRole('button', { name: 'Download PDF' }).click()
     ])
 
-    await expect(pdfDownload.suggestedFilename()).toContain('test-results-report')
-
-    await expect(pdfDownload.suggestedFilename()).toContain('.pdf')
+    expect(pdfDownload.suggestedFilename()).toBe('Test Project.pdf')
 
     const filePath = await pdfDownload.path()
     expect((await stat(filePath!)).size).toBeGreaterThan(300000)

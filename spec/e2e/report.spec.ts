@@ -49,4 +49,36 @@ test.describe('Report Page', () => {
 
     expect(download.suggestedFilename()).toMatch(/\.pdf$/)
   })
+
+  test('should name the downloaded PDF after the project name', async ({ page }) => {
+    await page.getByRole('navigation').getByRole('button', { name: 'Report' }).click()
+
+    await page.getByRole('textbox', { name: 'Project Name' }).fill('Release-November-2 Critical')
+
+    await page.getByRole('button', { name: 'Preview Report' }).click()
+
+    await expect(page.getByRole('button', { name: 'Download PDF' })).toBeVisible()
+
+    const [download] = await Promise.all([
+      page.waitForEvent('download'),
+      page.getByRole('button', { name: 'Download PDF' }).click()
+    ])
+
+    expect(download.suggestedFilename()).toBe('Release-November-2 Critical.pdf')
+  })
+
+  test('should use a date-stamped PDF name when the project name is empty', async ({ page }) => {
+    await page.getByRole('navigation').getByRole('button', { name: 'Report' }).click()
+
+    await page.getByRole('button', { name: 'Preview Report' }).click()
+
+    await expect(page.getByRole('button', { name: 'Download PDF' })).toBeVisible()
+
+    const [download] = await Promise.all([
+      page.waitForEvent('download'),
+      page.getByRole('button', { name: 'Download PDF' }).click()
+    ])
+
+    expect(download.suggestedFilename()).toMatch(/^test-results-report-\d{4}-\d{2}-\d{2}\.pdf$/)
+  })
 })

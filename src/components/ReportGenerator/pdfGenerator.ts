@@ -142,9 +142,26 @@ function findNearestBreak(
   return best;
 }
 
+const MAX_FILENAME_LENGTH = 200;
+
+// Builds the download name from the project name. Characters that are invalid
+// in file names on macOS, Windows, or Linux become dashes; falls back to a
+// date-stamped name when the project name is empty.
+export const buildReportFilename = (projectName: string): string => {
+  const cleaned = projectName
+    .replace(/[\\/:*?"<>|]/g, '-')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, MAX_FILENAME_LENGTH)
+    .replace(/^[. ]+|[. ]+$/g, '');
+
+  const baseName = cleaned || `test-results-report-${new Date().toISOString().split('T')[0]}`;
+  return `${baseName}.pdf`;
+};
+
 export const generatePDF = async (
   testData: TestData,
-  _config: ReportConfig,
+  config: ReportConfig,
   onProgress?: (progress: number) => void,
 ): Promise<void> => {
   let wrapper: HTMLDivElement | null = null;
@@ -319,8 +336,7 @@ export const generatePDF = async (
     }
 
     // ── 4. Save ──────────────────────────────────────────────────────
-    const filename = `test-results-report-${new Date().toISOString().split('T')[0]}.pdf`;
-    pdf.save(filename);
+    pdf.save(buildReportFilename(config.projectName));
 
     if (onProgress) onProgress(100);
   } catch (err) {

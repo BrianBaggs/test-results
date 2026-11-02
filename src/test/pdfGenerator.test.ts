@@ -247,18 +247,79 @@ describe('pdfGenerator', () => {
     )
   })
 
-  it('should save PDF with date-stamped filename', async () => {
+  it('should save PDF using the project name as the filename', async () => {
     const { generatePDF } = await import(
       '../components/ReportGenerator/pdfGenerator'
     )
 
-    await generatePDF(mockTestData, mockConfig)
+    await generatePDF(mockTestData, { ...mockConfig, projectName: 'Release-November-2 Critical' })
+
+    expect(__mocks.pdf.save).toHaveBeenCalledWith('Release-November-2 Critical.pdf')
+  })
+
+  it('should fall back to a date-stamped filename when the project name is empty', async () => {
+    const { generatePDF } = await import(
+      '../components/ReportGenerator/pdfGenerator'
+    )
+
+    await generatePDF(mockTestData, { ...mockConfig, projectName: '' })
 
     expect(__mocks.pdf.save).toHaveBeenCalledWith(
-      expect.stringMatching(
-        /test-results-report-\d{4}-\d{2}-\d{2}\.pdf/,
-      ),
+      expect.stringMatching(/^test-results-report-\d{4}-\d{2}-\d{2}\.pdf$/),
     )
+  })
+
+  describe('buildReportFilename', () => {
+    it('keeps spaces, dashes and digits from the project name', async () => {
+      const { buildReportFilename } = await import(
+        '../components/ReportGenerator/pdfGenerator'
+      )
+
+      expect(buildReportFilename('Release-November-2 Critical')).toBe('Release-November-2 Critical.pdf')
+    })
+
+    it('replaces characters that are invalid in file names with dashes', async () => {
+      const { buildReportFilename } = await import(
+        '../components/ReportGenerator/pdfGenerator'
+      )
+
+      expect(buildReportFilename('Web/API: v2 *beta* "rc" <a|b>?')).toBe('Web-API- v2 -beta- -rc- -a-b--.pdf')
+    })
+
+    it('collapses runs of whitespace and trims the ends', async () => {
+      const { buildReportFilename } = await import(
+        '../components/ReportGenerator/pdfGenerator'
+      )
+
+      expect(buildReportFilename('  Release   Candidate\t1  ')).toBe('Release Candidate 1.pdf')
+    })
+
+    it('strips leading and trailing dots and spaces', async () => {
+      const { buildReportFilename } = await import(
+        '../components/ReportGenerator/pdfGenerator'
+      )
+
+      expect(buildReportFilename('..Project.. ')).toBe('Project.pdf')
+    })
+
+    it('truncates long project names to 200 characters before the extension', async () => {
+      const { buildReportFilename } = await import(
+        '../components/ReportGenerator/pdfGenerator'
+      )
+
+      const result = buildReportFilename('a'.repeat(300))
+
+      expect(result).toBe(`${'a'.repeat(200)}.pdf`)
+    })
+
+    it('uses the date-stamped name when the project name is blank or only invalid characters', async () => {
+      const { buildReportFilename } = await import(
+        '../components/ReportGenerator/pdfGenerator'
+      )
+
+      expect(buildReportFilename('   ')).toMatch(/^test-results-report-\d{4}-\d{2}-\d{2}\.pdf$/)
+      expect(buildReportFilename('...')).toMatch(/^test-results-report-\d{4}-\d{2}-\d{2}\.pdf$/)
+    })
   })
 
   it('should add images to PDF for each page', async () => {
