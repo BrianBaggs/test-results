@@ -13,6 +13,15 @@ export default defineConfig({
     environment: 'jsdom',
     globals: true,
     setupFiles: ['./src/test/setup.ts'],
+    // Silences only the "jsdom was created N times" hint. Its suggested alternatives don't fit
+    // this suite: `pool: 'vmThreads'` breaks tests (globals such as ReadableStream are missing and
+    // window.location can't be redefined), and `isolate: false` breaks them too (DOM and mocks leak
+    // from one file into the next). Per-file jsdom setup is the cost of isolated DOM tests.
+    experimental: {
+      diagnostics: {
+        environment: false
+      }
+    },
     // server/**  tests live alongside their source rather than under src/test/ —
     // they belong to the separate tsconfig.node.json TS project, and importing
     // them from a src/ file trips TS6305 (see tsconfig.json's project reference).
