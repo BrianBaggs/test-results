@@ -343,14 +343,14 @@ export const generatePDF = async (
     console.error('PDF generation error:', err);
     if (err instanceof Error) {
       if (err.message.includes('timeout')) {
-        throw new Error('PDF generation timed out. The report may be too large. Consider filtering results.');
+        throw new Error('PDF generation timed out. The report may be too large. Consider filtering results.', { cause: err });
       } else if (err.message.includes('memory') || err.message.includes('Maximum call stack')) {
-        throw new Error(`Not enough memory to generate PDF with ${testData.summary.total} tests. Try reducing the dataset.`);
+        throw new Error(`Not enough memory to generate PDF with ${testData.summary.total} tests. Try reducing the dataset.`, { cause: err });
       } else {
-        throw new Error(`Failed to generate PDF: ${err.message}`);
+        throw new Error(`Failed to generate PDF: ${err.message}`, { cause: err });
       }
     } else {
-      throw new Error('Failed to generate PDF due to an unknown error. Please try again.');
+      throw new Error('Failed to generate PDF due to an unknown error. Please try again.', { cause: err });
     }
   } finally {
     wrapper?.remove();

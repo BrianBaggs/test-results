@@ -107,7 +107,7 @@ const processTestSuites = (suites: RawTestSuite | RawTestSuite[]): TestData => {
   // Ensure suites is an array
   const suitesArray = Array.isArray(suites) ? suites : [suites];
   let totalTests = 0;
-  let totalPassed = 0;
+  let totalPassed: number;
   let totalFailed = 0;
   let totalSkipped = 0;
   let totalTime = 0;
