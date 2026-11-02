@@ -3,6 +3,8 @@ import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { SplitPage } from '../components/Split/SplitPage';
 import * as downloadUtil from '../utils/download';
+import * as splitUtil from '../utils/splitJUnitXml';
+import * as exportBundleUtil from '../utils/exportBundle';
 import type { ExportBundle } from '../types';
 
 const VALID_XML = `<?xml version="1.0" encoding="UTF-8"?>
@@ -169,6 +171,50 @@ describe('SplitPage', () => {
       expect(await screen.findByText('Could not read "results.xml".')).toBeInTheDocument();
       readSpy.mockRestore();
     });
+
+    it('ignores a file picker change that has no file selected', () => {
+      render(<SplitPage xmlContent={null} onCombined={onCombined} setActiveTab={setActiveTab} />);
+
+      fireEvent.change(screen.getByLabelText('Upload XML file to split'), { target: { files: [] } });
+
+      expect(screen.queryByText(/^Using:/)).not.toBeInTheDocument();
+      expect(screen.getByText('Split').closest('button')).toBeDisabled();
+    });
+
+    it('ignores a drop that carries no files', () => {
+      render(<SplitPage xmlContent={null} onCombined={onCombined} setActiveTab={setActiveTab} />);
+
+      const dropZone = screen.getByLabelText('Upload XML file to split').closest('div') as HTMLElement;
+      fireEvent.drop(dropZone, { dataTransfer: { files: [] } });
+
+      expect(screen.queryByText(/^Using:/)).not.toBeInTheDocument();
+      expect(screen.getByText('Split').closest('button')).toBeDisabled();
+    });
+
+    it('uses singular wording when exactly one failed test is split', async () => {
+      const oneFailureXml = `<?xml version="1.0" encoding="UTF-8"?>
+        <testsuites><testsuite name="Suite" tests="2" failures="1" errors="0" skipped="0" time="2">
+          <testcase name="passes" classname="C" time="1" />
+          <testcase name="fails" classname="C" time="1"><failure message="m" type="E">x</failure></testcase>
+        </testsuite></testsuites>`;
+      render(<SplitPage xmlContent={null} onCombined={onCombined} setActiveTab={setActiveTab} />);
+
+      await uploadFile(screen.getByLabelText('Upload XML file to split'), new File([oneFailureXml], 'one.xml'));
+      await userEvent.click(screen.getByText('Split'));
+
+      expect(await screen.findByTestId('split-result')).toHaveTextContent(/^1 failed, errored, or flaky test split into/);
+    });
+
+    it('shows a generic error when splitting throws a non-Error value', async () => {
+      vi.spyOn(splitUtil, 'splitJUnitXml').mockImplementation(() => {
+        throw 'boom';
+      });
+      render(<SplitPage xmlContent={VALID_XML} onCombined={onCombined} setActiveTab={setActiveTab} />);
+
+      await userEvent.click(screen.getByText('Split'));
+
+      expect(await screen.findByText('Failed to split this file.')).toBeInTheDocument();
+    });
   });
 
   describe('Combine section', () => {
@@ -254,6 +300,18 @@ describe('SplitPage', () => {
       await userEvent.click(screen.getByText('Combine'));
 
       expect(await screen.findByText(/not valid JSON/)).toBeInTheDocument();
+      expect(onCombined).not.toHaveBeenCalled();
+    });
+
+    it('shows a generic error when combining fails with a non-Error value', async () => {
+      vi.spyOn(exportBundleUtil, 'readExportBundle').mockRejectedValue('boom');
+      render(<SplitPage xmlContent={null} onCombined={onCombined} setActiveTab={setActiveTab} />);
+
+      await uploadFile(screen.getByLabelText('Upload export A'), new File(['{}'], 'a.json'));
+      await uploadFile(screen.getByLabelText('Upload export B'), new File(['{}'], 'b.json'));
+      await userEvent.click(screen.getByText('Combine'));
+
+      expect(await screen.findByText('Failed to combine these files.')).toBeInTheDocument();
       expect(onCombined).not.toHaveBeenCalled();
     });
 

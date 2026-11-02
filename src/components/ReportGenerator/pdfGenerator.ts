@@ -117,7 +117,7 @@ function getForcedBreakPoints(clone: HTMLElement): number[] {
  * find the nearest safe break point. Prefer a break that is above the
  * ideal line (so content isn't cut) within a tolerance margin.
  */
-function findNearestBreak(
+export function findNearestBreak(
   breakPoints: number[],
   idealY: number,
   pageHeightPx: number,

@@ -84,6 +84,37 @@ describe('combineExportBundles', () => {
     expect(progress['S-f2'].status).toBe('in_progress');
   });
 
+  it('keeps the more recently updated progress entry when the two files disagree', () => {
+    const a = bundle(
+      [suite({ name: 'S', testcases: [tc({ name: 'f1', status: 'failed' })] })],
+      { 'S-f1': { id: 'S-f1', name: 'f1', suite: 'S', testStatus: 'failed', status: 'in_progress', updatedAt: '2024-01-02T00:00:00Z' } },
+    );
+    const b = bundle(
+      [suite({ name: 'S', testcases: [tc({ name: 'f1', status: 'failed' })] })],
+      { 'S-f1': { id: 'S-f1', name: 'f1', suite: 'S', testStatus: 'failed', status: 'completed', updatedAt: '2024-01-01T00:00:00Z' } },
+    );
+
+    const { progress, warnings } = combineExportBundles(a, b);
+
+    expect(progress['S-f1'].status).toBe('in_progress');
+    expect(warnings).toContainEqual(expect.stringMatching(/Progress for "f1" differs/));
+  });
+
+  it('prefers the second file\'s progress entry when neither side has a timestamp', () => {
+    const a = bundle(
+      [suite({ name: 'S', testcases: [tc({ name: 'f1', status: 'failed' })] })],
+      { 'S-f1': { id: 'S-f1', name: 'f1', suite: 'S', testStatus: 'failed', status: 'in_progress' } },
+    );
+    const b = bundle(
+      [suite({ name: 'S', testcases: [tc({ name: 'f1', status: 'failed' })] })],
+      { 'S-f1': { id: 'S-f1', name: 'f1', suite: 'S', testStatus: 'failed', status: 'completed' } },
+    );
+
+    const { progress } = combineExportBundles(a, b);
+
+    expect(progress['S-f1'].status).toBe('completed');
+  });
+
   it('warns when both bundles contain identical test data', () => {
     const shared = bundle([suite({ name: 'S', testcases: [tc({ name: 'f', status: 'failed' })] })]);
 

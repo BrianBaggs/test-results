@@ -3,6 +3,7 @@ import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { ShardPage } from '../components/Shard/ShardPage';
 import * as downloadUtil from '../utils/download';
+import * as mergeUtil from '../utils/mergeJUnitXml';
 
 function shardXml(suiteName: string, tests: number, failures: number): string {
   return `<?xml version="1.0" encoding="UTF-8"?>
@@ -204,6 +205,41 @@ describe('ShardPage', () => {
     await userEvent.click(screen.getByText('Choose XML Files'));
 
     expect(clickSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('ignores a file picker change with no files selected', () => {
+    render(<ShardPage onDataUpload={onDataUpload} onXmlContent={onXmlContent} setActiveTab={setActiveTab} />);
+
+    fireEvent.change(screen.getByLabelText('Upload JUnit XML shard reports'), { target: { files: [] } });
+
+    expect(screen.getByText('Combine Shards').closest('button')).toBeDisabled();
+  });
+
+  it('uses singular wording when the combined result has one test and one suite', async () => {
+    render(<ShardPage onDataUpload={onDataUpload} onXmlContent={onXmlContent} setActiveTab={setActiveTab} />);
+
+    await uploadFiles(screen.getByLabelText('Upload JUnit XML shard reports'), [
+      new File([shardXml('Only', 1, 0)], 'a.xml', { type: 'text/xml' }),
+      new File([shardXml('Only', 1, 0)], 'b.xml', { type: 'text/xml' }),
+    ]);
+    await userEvent.click(screen.getByText('Combine Shards'));
+
+    expect(await screen.findByTestId('shard-result')).toHaveTextContent(/Combined 1 test \(0 failed\) from 2 files across 1 suite\./);
+  });
+
+  it('shows a generic error when combining throws a non-Error value', async () => {
+    vi.spyOn(mergeUtil, 'mergeJUnitXml').mockImplementation(() => {
+      throw 'boom';
+    });
+    render(<ShardPage onDataUpload={onDataUpload} onXmlContent={onXmlContent} setActiveTab={setActiveTab} />);
+
+    await uploadFiles(screen.getByLabelText('Upload JUnit XML shard reports'), [
+      new File([shardXml('A', 1, 0)], 'a.xml', { type: 'text/xml' }),
+      new File([shardXml('B', 1, 0)], 'b.xml', { type: 'text/xml' }),
+    ]);
+    await userEvent.click(screen.getByText('Combine Shards'));
+
+    expect(await screen.findByText('Failed to combine these files.')).toBeInTheDocument();
   });
 
   it('ignores an empty file drop', () => {

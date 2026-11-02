@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor, act } from '@testing-library/react';
+import { render, screen, waitFor, act, fireEvent } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { Dashboard } from '../components/Dashboard/Dashboard';
 
@@ -270,6 +270,25 @@ describe('Dashboard', () => {
       render(<Dashboard onDataUpload={mockOnDataUpload} testData={null} />);
 
       expect(screen.queryByRole('button', { name: /Load Different File/i })).not.toBeInTheDocument();
+    });
+
+    it('opens the hidden file picker when "Load Different File" is clicked', async () => {
+      render(<Dashboard onDataUpload={mockOnDataUpload} testData={testData} />);
+
+      const input = screen.getByLabelText('Upload a different XML file') as HTMLInputElement;
+      const clickSpy = vi.spyOn(input, 'click');
+
+      await userEvent.click(screen.getByRole('button', { name: /Load Different File/i }));
+
+      expect(clickSpy).toHaveBeenCalledTimes(1);
+    });
+
+    it('ignores a reload selection that has no file', () => {
+      render(<Dashboard onDataUpload={mockOnDataUpload} testData={testData} />);
+
+      fireEvent.change(screen.getByLabelText('Upload a different XML file'), { target: { files: [] } });
+
+      expect(mockOnDataUpload).not.toHaveBeenCalled();
     });
 
     it('should parse and upload a newly selected file without requiring a manual clear first', async () => {

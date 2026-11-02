@@ -131,6 +131,67 @@ describe('pdfGenerator', () => {
     vi.restoreAllMocks()
   })
 
+  it('should strip interactive elements and force SVGs to overflow visibly in the captured clone', async () => {
+    reportEl.innerHTML = `
+      <button>Download</button>
+      <input type="text" />
+      <select><option>a</option></select>
+      <div class="print-hide">controls</div>
+      <div class="recharts-tooltip-wrapper">tip</div>
+      <svg><rect width="1" height="1" /></svg>
+      <div>kept</div>`;
+    const { generatePDF } = await import(
+      '../components/ReportGenerator/pdfGenerator'
+    )
+
+    await generatePDF(mockTestData, mockConfig)
+
+    const captured = __mocks.html2canvas.mock.calls[0][0] as HTMLElement;
+    expect(captured.querySelector('button')).toBeNull();
+    expect(captured.querySelector('input')).toBeNull();
+    expect(captured.querySelector('select')).toBeNull();
+    expect(captured.querySelector('.print-hide')).toBeNull();
+    expect(captured.querySelector('.recharts-tooltip-wrapper')).toBeNull();
+    expect(captured.textContent).toContain('kept');
+    expect((captured.querySelector('svg') as SVGSVGElement).style.overflow).toBe('visible');
+  })
+
+  it('should handle several protected and forced-break blocks when laying out pages', async () => {
+    reportEl.innerHTML = `
+      <div class="avoid-break">first</div>
+      <div class="avoid-break">second</div>
+      <div class="page-break-before">section one</div>
+      <div class="page-break-before">section two</div>`;
+    const { generatePDF } = await import(
+      '../components/ReportGenerator/pdfGenerator'
+    )
+
+    await expect(generatePDF(mockTestData, mockConfig)).resolves.toBeUndefined();
+    expect(__mocks.pdf.save).toHaveBeenCalledTimes(1);
+  })
+
+  it('should reject when charts never finish rendering in the browser', async () => {
+    const globalVi = (window as unknown as { vi?: unknown }).vi;
+    delete (window as unknown as { vi?: unknown }).vi;
+    document.querySelector('.chart-render-complete')?.remove();
+    vi.useFakeTimers();
+
+    try {
+      const { generatePDF } = await import(
+        '../components/ReportGenerator/pdfGenerator'
+      )
+
+      const pending = generatePDF(mockTestData, mockConfig);
+      const assertion = expect(pending).rejects.toThrow('Rendering did not complete within the maximum wait time');
+      await vi.advanceTimersByTimeAsync(6000);
+
+      await assertion;
+    } finally {
+      vi.useRealTimers();
+      (window as unknown as { vi?: unknown }).vi = globalVi;
+    }
+  })
+
   it('should export generatePDF function', async () => {
     const { generatePDF } = await import(
       '../components/ReportGenerator/pdfGenerator'
@@ -267,6 +328,39 @@ describe('pdfGenerator', () => {
     expect(__mocks.pdf.save).toHaveBeenCalledWith(
       expect.stringMatching(/^test-results-report-\d{4}-\d{2}-\d{2}\.pdf$/),
     )
+  })
+
+  describe('findNearestBreak', () => {
+    it('falls back to the ideal page end when there are no break points', async () => {
+      const { findNearestBreak } = await import('../components/ReportGenerator/pdfGenerator')
+
+      expect(findNearestBreak([], 1000, 1123)).toBe(1000)
+    })
+
+    it('picks the closest break point at or above the ideal page end', async () => {
+      const { findNearestBreak } = await import('../components/ReportGenerator/pdfGenerator')
+
+      expect(findNearestBreak([900, 950, 1010], 1000, 1123)).toBe(950)
+    })
+
+    it('ignores break points further than 15% of the page height above the ideal page end', async () => {
+      const { findNearestBreak } = await import('../components/ReportGenerator/pdfGenerator')
+
+      // tolerance = 1123 * 0.15 ≈ 168, so anything above 832 is out of range
+      expect(findNearestBreak([800], 1000, 1123)).toBe(1000)
+    })
+
+    it('ignores break points that fall below the ideal page end', async () => {
+      const { findNearestBreak } = await import('../components/ReportGenerator/pdfGenerator')
+
+      expect(findNearestBreak([1050], 1000, 1123)).toBe(1000)
+    })
+
+    it('keeps the first of two equally close break points', async () => {
+      const { findNearestBreak } = await import('../components/ReportGenerator/pdfGenerator')
+
+      expect(findNearestBreak([950, 950], 1000, 1123)).toBe(950)
+    })
   })
 
   describe('buildReportFilename', () => {

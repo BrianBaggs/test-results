@@ -34,7 +34,12 @@ console.error = (...args: unknown[]) => {
     // React logs this as console.error('The tag <%s> is unrecognized...', type) — match
     // around the %s placeholder rather than the substituted tag name, since args.join(' ')
     // below never performs that substitution.
-    message.includes('is unrecognized in this browser')
+    message.includes('is unrecognized in this browser') ||
+    // next-themes (0.4.x) intentionally renders an inline <script> inside ThemeProvider so the
+    // saved theme is applied before first paint (prevents a flash of the wrong theme). React
+    // warns about any <script> rendered from a component; the script is what we want in the
+    // app, and it never runs under jsdom, so the warning is noise here.
+    message.includes('Encountered a script tag while rendering React component')
   ) {
     return
   }

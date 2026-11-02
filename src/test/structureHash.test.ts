@@ -95,6 +95,12 @@ describe('computeResultsHash', () => {
     expect(await computeResultsHash(makeTestData([failed]))).toBeUndefined();
   });
 
+  it('computeStructureHash returns undefined when SubtleCrypto is unavailable', async () => {
+    vi.stubGlobal('crypto', { subtle: undefined });
+
+    expect(await computeStructureHash(makeTestData([failed]))).toBeUndefined();
+  });
+
   describe('for a combined result', () => {
     const ORIGINAL_XML = `<?xml version="1.0" encoding="UTF-8"?>
 <testsuites>

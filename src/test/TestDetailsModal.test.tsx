@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, fireEvent } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { TestDetailsModal } from '../components/Dashboard/TestDetailsModal';
 import { TestCase } from '../types';
@@ -321,5 +321,32 @@ describe('TestDetailsModal', () => {
     // No stack trace text either — the terminal block should not render an empty shell.
     expect(screen.queryByText('Stack Trace')).not.toBeInTheDocument();
     expect(screen.queryByTestId('terminal-icon')).not.toBeInTheDocument();
+  });
+
+  it('copies the stack trace to the clipboard and confirms with "Copied"', async () => {
+    const originalClipboard = Object.getOwnPropertyDescriptor(navigator, 'clipboard');
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true });
+
+    try {
+      const failedTest: TestCase = {
+        name: 'Failed Test',
+        status: 'failed',
+        suite: 'Test Suite',
+        time: 2.0,
+        errorMessage: 'Boom',
+        failureDetails: { message: 'Boom', type: 'Error', stackTrace: 'first line\n\nthird line' }
+      };
+
+      render(<TestDetailsModal test={failedTest} onClose={mockOnClose} />);
+
+      fireEvent.click(screen.getByRole('button', { name: 'Copy' }));
+
+      expect(writeText).toHaveBeenCalledWith('first line\n\nthird line');
+      expect(await screen.findByRole('button', { name: 'Copied' })).toBeInTheDocument();
+    } finally {
+      if (originalClipboard) Object.defineProperty(navigator, 'clipboard', originalClipboard);
+      else delete (navigator as { clipboard?: unknown }).clipboard;
+    }
   });
 });
