@@ -164,7 +164,7 @@ const processTestSuites = (suites: RawTestSuite | RawTestSuite[]): TestData => {
               stackTrace: testcase.error['#text'] || ''
             };
           }
-        } else if (testcase.skipped) {
+        } else if (testcase.skipped !== undefined) {
           status = 'skipped';
         }
         const testCase: TestCase = {

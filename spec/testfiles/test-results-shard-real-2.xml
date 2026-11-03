@@ -1,0 +1,173 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuites id="" name="" tests="25" failures="1" skipped="2" errors="0" time="160.54115">
+<testsuite name="e2e/organization_vendors/show/admin/tprm.spec.ts" timestamp="2026-11-02T19:12:41.325Z" hostname="chromium" tests="14" failures="0" skipped="1" time="36.615" errors="0">
+<testcase name="Vendor TPRM scan results › Displays the scan history" classname="e2e/organization_vendors/show/admin/tprm.spec.ts" time="2.844">
+</testcase>
+<testcase name="Vendor TPRM scan results › Displays the completed scan assessment" classname="e2e/organization_vendors/show/admin/tprm.spec.ts" time="2.572">
+</testcase>
+<testcase name="Vendor TPRM scan results › Confirms the DNS email security section" classname="e2e/organization_vendors/show/admin/tprm.spec.ts" time="2.692">
+</testcase>
+<testcase name="Vendor TPRM scan results › Confirms the SPF section" classname="e2e/organization_vendors/show/admin/tprm.spec.ts" time="2.629">
+</testcase>
+<testcase name="Vendor TPRM scan results › Confirms the DKIM section" classname="e2e/organization_vendors/show/admin/tprm.spec.ts" time="2.592">
+</testcase>
+<testcase name="Vendor TPRM scan results › Confirms the DMARC section" classname="e2e/organization_vendors/show/admin/tprm.spec.ts" time="2.973">
+</testcase>
+<testcase name="Vendor TPRM scan results › Confirms the PTR section" classname="e2e/organization_vendors/show/admin/tprm.spec.ts" time="2.939">
+</testcase>
+<testcase name="Vendor TPRM scan results › Confirms the DNSSEC section" classname="e2e/organization_vendors/show/admin/tprm.spec.ts" time="3.124">
+</testcase>
+<testcase name="Vendor TPRM scan results › Confirms the CAA section" classname="e2e/organization_vendors/show/admin/tprm.spec.ts" time="2.915">
+</testcase>
+<testcase name="Vendor TPRM scan results › Confirms the Spamhaus section" classname="e2e/organization_vendors/show/admin/tprm.spec.ts">
+<properties>
+<property name="fixme" value="">
+</property>
+</properties>
+<skipped>
+</skipped>
+</testcase>
+<testcase name="Vendor TPRM scan results › Confirms the MTA-STS section" classname="e2e/organization_vendors/show/admin/tprm.spec.ts" time="2.664">
+</testcase>
+<testcase name="Vendor TPRM scan results › Confirms the Security headers section" classname="e2e/organization_vendors/show/admin/tprm.spec.ts" time="3.076">
+</testcase>
+<testcase name="Vendor TPRM scan results › Confirms the Domain registration section" classname="e2e/organization_vendors/show/admin/tprm.spec.ts" time="2.844">
+</testcase>
+<testcase name="Vendor TPRM scan results › Confirms the Certificate and TLS section" classname="e2e/organization_vendors/show/admin/tprm.spec.ts" time="2.751">
+</testcase>
+</testsuite>
+<testsuite name="e2e/vulnerability_scanning/show/admin/false_positives.spec.ts" timestamp="2026-11-02T19:12:41.325Z" hostname="chromium" tests="1" failures="0" skipped="1" time="0" errors="0">
+<testcase name="Vulnerability scanning show tabs › View a false positive" classname="e2e/vulnerability_scanning/show/admin/false_positives.spec.ts">
+<properties>
+<property name="fixme" value="">
+</property>
+</properties>
+<skipped>
+</skipped>
+</testcase>
+</testsuite>
+<testsuite name="e2e/users/index/admin/import.spec.ts" timestamp="2026-11-02T19:12:41.325Z" hostname="chromium" tests="1" failures="1" skipped="0" time="31.586" errors="0">
+<testcase name="Users index import › Import users preview" classname="e2e/users/index/admin/import.spec.ts" time="31.586">
+<system-out>
+<![CDATA[
+[[ATTACHMENT|../securicy-app/test-results/e2e-users-index-admin-impo-ce9ce-import-Import-users-preview-chromium/video.webm]]
+
+[[ATTACHMENT|../securicy-app/test-results/e2e-users-index-admin-impo-ce9ce-import-Import-users-preview-chromium/error-context.md]]
+
+[[ATTACHMENT|../securicy-app/test-results/e2e-users-index-admin-impo-ce9ce-import-Import-users-preview-chromium/trace.zip]]
+
+[[ATTACHMENT|../securicy-app/test-results/e2e-users-index-admin-impo-ce9ce-import-Import-users-preview-chromium-retry1/video.webm]]
+
+[[ATTACHMENT|../securicy-app/test-results/e2e-users-index-admin-impo-ce9ce-import-Import-users-preview-chromium-retry1/error-context.md]]
+
+[[ATTACHMENT|../securicy-app/test-results/e2e-users-index-admin-impo-ce9ce-import-Import-users-preview-chromium-retry1/trace.zip]]
+]]>
+</system-out>
+<failure message="expect(locator).toBeVisible() failed" type="expect.toBeVisible">
+<![CDATA[  [chromium] › e2e/users/index/admin/import.spec.ts:13:3 › Users index import › Import users preview @regression @critical 
+
+    Error: expect(locator).toBeVisible() failed
+
+    Locator: getByRole('button', { name: 'Import 3 Users' })
+    Expected: visible
+    Timeout: 10000ms
+    Error: element(s) not found
+
+    Call log:
+      - Expect "toBeVisible" getByRole('button', { name: 'Import 3 Users' }) with timeout 10000ms
+      - waiting for getByRole('button', { name: 'Import 3 Users' })
+
+
+      36 |     await expect(helper.getModal().locator('tr td')).toContainText(['user_1', 'user_2', 'user_3'])
+      37 |
+    > 38 |     await expect(page.getByRole('button', { name: 'Import 3 Users' })).toBeVisible()
+         |                                                                        ^
+      39 |   })
+      40 | })
+      41 |
+        at /Users/matthewcarabincarbide/Dev/securicy-app/spec/playwright/playwright/e2e/users/index/admin/import.spec.ts:38:72
+
+    attachment #1: video (video/webm) ──────────────────────────────────────────────────────────────
+    ../../../test-results/e2e-users-index-admin-impo-ce9ce-import-Import-users-preview-chromium/video.webm
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+    Error Context: ../../../test-results/e2e-users-index-admin-impo-ce9ce-import-Import-users-preview-chromium/error-context.md
+
+    attachment #3: trace (application/zip) ─────────────────────────────────────────────────────────
+    ../../../test-results/e2e-users-index-admin-impo-ce9ce-import-Import-users-preview-chromium/trace.zip
+    Usage:
+
+        npx playwright show-trace ../../../test-results/e2e-users-index-admin-impo-ce9ce-import-Import-users-preview-chromium/trace.zip
+
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+    Retry #1 ───────────────────────────────────────────────────────────────────────────────────────
+
+    Error: expect(locator).toBeVisible() failed
+
+    Locator: getByRole('button', { name: 'Import 3 Users' })
+    Expected: visible
+    Timeout: 10000ms
+    Error: element(s) not found
+
+    Call log:
+      - Expect "toBeVisible" getByRole('button', { name: 'Import 3 Users' }) with timeout 10000ms
+      - waiting for getByRole('button', { name: 'Import 3 Users' })
+
+
+      36 |     await expect(helper.getModal().locator('tr td')).toContainText(['user_1', 'user_2', 'user_3'])
+      37 |
+    > 38 |     await expect(page.getByRole('button', { name: 'Import 3 Users' })).toBeVisible()
+         |                                                                        ^
+      39 |   })
+      40 | })
+      41 |
+        at /Users/matthewcarabincarbide/Dev/securicy-app/spec/playwright/playwright/e2e/users/index/admin/import.spec.ts:38:72
+
+    attachment #1: video (video/webm) ──────────────────────────────────────────────────────────────
+    ../../../test-results/e2e-users-index-admin-impo-ce9ce-import-Import-users-preview-chromium-retry1/video.webm
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+    Error Context: ../../../test-results/e2e-users-index-admin-impo-ce9ce-import-Import-users-preview-chromium-retry1/error-context.md
+
+    attachment #3: trace (application/zip) ─────────────────────────────────────────────────────────
+    ../../../test-results/e2e-users-index-admin-impo-ce9ce-import-Import-users-preview-chromium-retry1/trace.zip
+    Usage:
+
+        npx playwright show-trace ../../../test-results/e2e-users-index-admin-impo-ce9ce-import-Import-users-preview-chromium-retry1/trace.zip
+
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+]]>
+</failure>
+</testcase>
+</testsuite>
+<testsuite name="e2e/penetration_testing/show/owner/filters.spec.ts" timestamp="2026-11-02T19:12:41.325Z" hostname="chromium" tests="9" failures="0" skipped="0" time="71.4" errors="0">
+<testcase name="Penetration testing show filters › Status filter - in progress" classname="e2e/penetration_testing/show/owner/filters.spec.ts" time="4.136">
+</testcase>
+<testcase name="Penetration testing show filters › Status filter - closed" classname="e2e/penetration_testing/show/owner/filters.spec.ts" time="4.258">
+</testcase>
+<testcase name="Penetration testing show filters › Status filter - open" classname="e2e/penetration_testing/show/owner/filters.spec.ts" time="35.097">
+<system-out>
+<![CDATA[
+[[ATTACHMENT|../securicy-app/test-results/e2e-penetration_testing-sh-aa7c9-ilters-Status-filter---open-chromium/video.webm]]
+
+[[ATTACHMENT|../securicy-app/test-results/e2e-penetration_testing-sh-aa7c9-ilters-Status-filter---open-chromium/error-context.md]]
+
+[[ATTACHMENT|../securicy-app/test-results/e2e-penetration_testing-sh-aa7c9-ilters-Status-filter---open-chromium/trace.zip]]
+]]>
+</system-out>
+</testcase>
+<testcase name="Penetration testing show filters › Status filter - partially closed" classname="e2e/penetration_testing/show/owner/filters.spec.ts" time="4.237">
+</testcase>
+<testcase name="Penetration testing show filters › Status filter - risk accepted" classname="e2e/penetration_testing/show/owner/filters.spec.ts" time="4.336">
+</testcase>
+<testcase name="Penetration testing show filters › Severity filter - informational" classname="e2e/penetration_testing/show/owner/filters.spec.ts" time="4.369">
+</testcase>
+<testcase name="Penetration testing show filters › Severity filter - low" classname="e2e/penetration_testing/show/owner/filters.spec.ts" time="4.527">
+</testcase>
+<testcase name="Penetration testing show filters › Severity and status filter - critical and closed" classname="e2e/penetration_testing/show/owner/filters.spec.ts" time="6.082">
+</testcase>
+<testcase name="Penetration testing show filters › Assignee filter" classname="e2e/penetration_testing/show/owner/filters.spec.ts" time="4.358">
+</testcase>
+</testsuite>
+</testsuites>

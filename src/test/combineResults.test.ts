@@ -1,5 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { combineExportBundles } from '../utils/combineResults';
+import { splitJUnitXml } from '../utils/splitJUnitXml';
+import { parseJUnitXML } from '../utils/xmlParser';
 import { testIdentityKey } from '../utils/testIdentity';
 import type { ExportBundle, TestCase, TestSuite } from '../types';
 
@@ -288,5 +290,37 @@ describe('combineExportBundles', () => {
 
     expect(warnings).toContainEqual(expect.stringMatching(/kept the flaky one/));
     expect(testData.suites[0].testcases[0].status).toBe('flaky');
+  });
+});
+
+describe('split -> parse -> combine on real JUnit XML', () => {
+  it('keeps the skipped count (and passed count) of the original report', () => {
+    // Real <skipped> elements, parsed by the actual parser — not hand-built statuses.
+    const xml = `<?xml version="1.0" encoding="UTF-8"?>
+<testsuites id="" name="" tests="6" failures="2" skipped="2" errors="0" time="6">
+  <testsuite name="a.spec.ts" tests="4" failures="2" skipped="1" errors="0" time="4">
+    <testcase name="ok" classname="a" time="1"/>
+    <testcase name="skip me" classname="a" time="1"><skipped></skipped></testcase>
+    <testcase name="bad 1" classname="a" time="1"><failure message="m" type="E">x</failure></testcase>
+    <testcase name="bad 2" classname="a" time="1"><failure message="m" type="E">x</failure></testcase>
+  </testsuite>
+  <testsuite name="b.spec.ts" tests="2" failures="0" skipped="1" errors="0" time="2">
+    <testcase name="ok" classname="b" time="1"/>
+    <testcase name="skip me too" classname="b" time="1"><skipped/></testcase>
+  </testsuite>
+</testsuites>`;
+    const original = parseJUnitXML(xml);
+    const split = splitJUnitXml(xml);
+    const asBundle = (data: ReturnType<typeof parseJUnitXML>): ExportBundle => ({ version: 1, testData: data, progress: {}, structureHash: 'h' });
+
+    const combined = combineExportBundles(asBundle(parseJUnitXML(split.fileAXml)), asBundle(parseJUnitXML(split.fileBXml))).testData;
+
+    expect(original.summary.skipped).toBe(2);
+    expect(combined.summary).toMatchObject({
+      total: original.summary.total,
+      passed: original.summary.passed,
+      failed: original.summary.failed,
+      skipped: original.summary.skipped,
+    });
   });
 });

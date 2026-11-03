@@ -1,4 +1,6 @@
 import { describe, it, expect } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { XMLParser } from 'fast-xml-parser';
 import { mergeJUnitXml } from '../utils/mergeJUnitXml';
 import { parseJUnitXML } from '../utils/xmlParser';
 import type { JUnitXmlFile } from '../utils/mergeJUnitXml';
@@ -49,6 +51,40 @@ describe('mergeJUnitXml', () => {
     expect(result.xml).toContain('errors="1"');
     expect(result.xml).toContain('skipped="1"');
     expect(result.xml).toContain('time="3.500"');
+  });
+
+  describe('run time', () => {
+    const suite = (name: string, time: string) => `<testsuite name="${name}" tests="1" failures="0" errors="0" skipped="0" time="${time}" />`;
+
+    it("sums each shard's own root time rather than only its suites' times", () => {
+      // Root time exceeds the suite sum, as in real Playwright output (retries are included).
+      const a = file('a.xml', suite('A', '10'), 'id="" name="" time="15.5"');
+      const b = file('b.xml', suite('B', '20'), 'id="" name="" time="25.25"');
+
+      expect(mergeJUnitXml([a, b]).xml).toContain('time="40.750"');
+    });
+
+    it('falls back to the suites\' times for a file with no root time (bare <testsuite> or no time attribute)', () => {
+      const bare: JUnitXmlFile = { name: 'bare.xml', xml: `<testsuite name="Bare" tests="1" failures="0" errors="0" skipped="0" time="4"/>` };
+      const noRootTime = file('b.xml', suite('B', '6'));
+      const withRootTime = file('c.xml', suite('C', '1'), 'id="" name="" time="9"');
+
+      expect(mergeJUnitXml([bare, noRootTime, withRootTime]).xml).toContain('time="19.000"');
+    });
+
+    it('does not count a wholly identical file\'s time twice', () => {
+      const a = file('a.xml', suite('A', '10'), 'id="" name="" time="15"');
+
+      expect(mergeJUnitXml([a, { ...a, name: 'copy.xml' }]).xml).toContain('time="15.000"');
+    });
+
+    it('subtracts the time of a suite dropped as an exact cross-file duplicate', () => {
+      const a = file('a.xml', suite('Shared', '5') + suite('A', '10'), 'id="" name="" time="20"');
+      const b = file('b.xml', suite('Shared', '5') + suite('B', '10'), 'id="" name="" time="22"');
+
+      // 20 + (22 - 5): the duplicate "Shared" suite's 5s is already inside a.xml's total.
+      expect(mergeJUnitXml([a, b]).xml).toContain('time="37.000"');
+    });
   });
 
   it('preserves non-recomputed root attributes (e.g. id/name) from the first file that has a <testsuites> wrapper', () => {
@@ -106,6 +142,133 @@ line 2 with &amp; special &gt; chars</failure></testcase>
       message: 'Assertion < 5',
       type: 'AssertionError',
       stackTrace: 'line 1\nline 2 with & special > chars',
+    });
+  });
+
+  describe('element fidelity', () => {
+    // Parsed with a real attribute prefix, the way the merge itself does. The app's own
+    // reader (prefix '') flattens attributes and child elements into one object, so it
+    // can't tell <skipped/> from skipped="" — which is exactly how this regressed unnoticed.
+    const strictParse = (xml: string) => new XMLParser({ ignoreAttributes: false, attributeNamePrefix: '@_', parseTagValue: false }).parse(xml);
+
+    const suiteXml = `<testsuite name="Suite" tests="3" failures="1" errors="0" skipped="1" time="3">
+        <testcase name="skipped one" classname="C" time="0"><properties></properties><skipped></skipped></testcase>
+        <testcase name="flaky one" classname="C" time="1"><system-out><![CDATA[[[ATTACHMENT|results/video.webm]]]]></system-out></testcase>
+        <testcase name="failed one" classname="C" time="2"><system-out>007</system-out><failure message="m" type="E">trace</failure></testcase>
+      </testsuite>`;
+
+    it('keeps <skipped/>, <system-out> and <properties/> as child elements, not attributes on <testcase>', () => {
+      const result = mergeJUnitXml([
+        file('a.xml', suiteXml),
+        file('b.xml', `<testsuite name="Other" tests="1" failures="0" errors="0" skipped="0" time="1" />`),
+      ]);
+
+      expect(result.xml).not.toMatch(/<testcase[^>]*\s(skipped|system-out|properties)=/);
+      const merged = strictParse(result.xml).testsuites.testsuite.find((s: Record<string, string>) => s['@_name'] === 'Suite');
+      const original = strictParse(file('a.xml', suiteXml).xml).testsuites.testsuite;
+      expect(merged).toEqual(original);
+    });
+
+    it('does not coerce element text to a number (e.g. "007" stays "007")', () => {
+      const result = mergeJUnitXml([file('a.xml', suiteXml), file('b.xml', `<testsuite name="Other" tests="0" time="0" />`)]);
+
+      expect(result.xml).toContain('<system-out>007</system-out>');
+    });
+
+    it('still lets the app detect flaky tests from the preserved <system-out>', () => {
+      // Enough other passing tests to stay under the app's flaky plausibility guard.
+      const result = mergeJUnitXml([file('a.xml', suiteXml), file('b.xml', `<testsuite name="Other" tests="10" time="1" />`)]);
+
+      expect(parseJUnitXML(result.xml).summary.flaky).toBe(1);
+    });
+  });
+
+  it('starts the output with an XML declaration', () => {
+    const result = mergeJUnitXml([
+      file('a.xml', `<testsuite name="A" tests="1" failures="0" errors="0" skipped="0" time="1" />`),
+      file('b.xml', `<testsuite name="B" tests="1" failures="0" errors="0" skipped="0" time="1" />`),
+    ]);
+
+    expect(result.xml.startsWith('<?xml version="1.0" encoding="UTF-8"?>\n<testsuites')).toBe(true);
+  });
+
+  describe('stack trace fidelity', () => {
+    // What the app reads back (message/type/stackTrace) must be identical before and after
+    // the merge — it's what the Failures and Progress tabs show when updating failed tests.
+    const failureBodies: Record<string, string> = {
+      'plain text with entities': `<failure message="m" type="E">plain &amp; &lt;b&gt; text</failure>`,
+      'CDATA with leading indent and trailing newline': `<failure message="m" type="E">\n<![CDATA[  a & b <c> "q"\n  line2\n]]>\n</failure>`,
+      'CDATA containing ]]>': `<failure message="m" type="E"><![CDATA[x ]]]]><![CDATA[> y]]></failure>`,
+      'multiple CDATA sections': `<failure message="m" type="E"><![CDATA[one]]><![CDATA[two]]></failure>`,
+      'plain text mixed with CDATA': `<failure message="m" type="E">before<![CDATA[ <mid> ]]>after</failure>`,
+      'an <error> element': `<error message="m" type="E"><![CDATA[  boom\n]]></error>`,
+      'empty body': `<failure message="m" type="E"></failure>`,
+      'self-closing': `<failure message="m" type="E"/>`,
+    };
+
+    it.each(Object.entries(failureBodies))('keeps failure details identical: %s', (_label, body) => {
+      const a = file('a.xml', `<testsuite name="A" tests="1" failures="1" errors="0" skipped="0" time="1"><testcase name="t" classname="c">${body}</testcase></testsuite>`);
+      const b = file('b.xml', `<testsuite name="B" tests="0" failures="0" errors="0" skipped="0" time="0" />`);
+
+      const before = parseJUnitXML(a.xml).suites[0].testcases[0];
+      const after = parseJUnitXML(mergeJUnitXml([a, b]).xml).suites.find((s) => s.name === 'A')!.testcases[0];
+
+      expect(before.status).toBe('failed');
+      expect(after.status).toBe(before.status);
+      expect(after.failureDetails).toEqual(before.failureDetails);
+      expect(after.errorMessage).toBe(before.errorMessage);
+    });
+  });
+
+  describe('against real sharded production data', () => {
+    // Two shards carved from a real production run (see spec/testfiles): skipped tests,
+    // failures and errors with retry/attachment stack traces, and flaky candidates.
+    const read = (n: number): JUnitXmlFile => ({
+      name: `test-results-shard-real-${n}.xml`,
+      xml: readFileSync(`spec/testfiles/test-results-shard-real-${n}.xml`, 'utf8'),
+    });
+    const shards = [read(1), read(2)];
+    const parts = shards.map((s) => parseJUnitXML(s.xml));
+    const merged = parseJUnitXML(mergeJUnitXml(shards).xml);
+
+    it.each(['total', 'failed', 'skipped'] as const)('%s equals the sum of the two shards', (field) => {
+      expect(merged.summary[field]).toBe(parts[0].summary[field] + parts[1].summary[field]);
+    });
+
+    // Flaky detection has a whole-run plausibility guard (FLAKY_GUARD_MAX_RATIO), so on a tiny
+    // shard it can skip detection that the merged — larger, more realistic — run keeps. Passed
+    // and flaky are therefore compared together, which is guard-independent. (On the full real
+    // 3030-suite export, flaky also sums exactly: 1 + 4 = 5.)
+    it('passed + flaky equals the sum of the two shards', () => {
+      const clean = (s: (typeof parts)[number]['summary']) => s.passed + s.flaky;
+
+      expect(clean(merged.summary)).toBe(clean(parts[0].summary) + clean(parts[1].summary));
+    });
+
+    it('still detects flaky tests in the merged run, from the attachment output carried through', () => {
+      expect(merged.summary.flaky).toBeGreaterThan(0);
+    });
+
+    it('run time equals the sum of the two shards', () => {
+      expect(merged.summary.time).toBeCloseTo(parts[0].summary.time + parts[1].summary.time, 6);
+    });
+
+    it('has every suite and every test exactly as parsed from its own shard — status, time, message and full stack trace', () => {
+      // Flaky is the one status that's a whole-run call (see above), so it's compared as passed.
+      const unflaky = (suite: (typeof merged.suites)[number]) => ({
+        ...suite,
+        testcases: suite.testcases.map((t) => (t.status === 'flaky' ? { ...t, status: 'passed' as const, failureDetails: null } : t)),
+      });
+      const expected = parts.flatMap((p) => p.suites);
+
+      expect(merged.suites).toHaveLength(expected.length);
+      expected.forEach((suite) => {
+        expect(unflaky(merged.suites.find((s) => s.name === suite.name)!)).toEqual(unflaky(suite));
+      });
+      // Guard against the comparison above passing vacuously.
+      expect(merged.summary.skipped).toBeGreaterThan(0);
+      expect(merged.summary.failed).toBeGreaterThan(0);
+      expect(merged.suites.flatMap((s) => s.testcases).filter((t) => t.status === 'failed' && t.failureDetails?.stackTrace).length).toBe(merged.summary.failed);
     });
   });
 

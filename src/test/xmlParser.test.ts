@@ -117,10 +117,36 @@ describe('parseJUnitXML', () => {
         time: 1.0
       });
 
-      // Note: Current implementation doesn't properly detect skipped element
-      // This is a known limitation that would need to be fixed in the parser
-      expect(result.suites[0].testcases[0].status).toBe('passed');
+      expect(result.suites[0].testcases[0].status).toBe('skipped');
+      expect(result.suites[0].testcases[1].status).toBe('passed');
       expect(result.suites[0].skipped).toBe(1);
+    });
+
+    it('detects a skipped testcase whether <skipped> is empty, self-closing, or carries a message', () => {
+      const xml = `<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="S" tests="3" failures="0" errors="0" skipped="3" time="0">
+  <testcase name="a" classname="C" time="0"><skipped></skipped></testcase>
+  <testcase name="b" classname="C" time="0"><skipped/></testcase>
+  <testcase name="c" classname="C" time="0"><skipped message="not today"/></testcase>
+</testsuite>`;
+
+      const result = parseJUnitXML(xml);
+
+      expect(result.suites[0].testcases.map((t) => t.status)).toEqual(['skipped', 'skipped', 'skipped']);
+    });
+
+    it('does not treat a skipped testcase as a flaky candidate even if it has attachment output', () => {
+      const xml = `<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="S" tests="3" failures="0" errors="0" skipped="1" time="0">
+  <testcase name="a" classname="C" time="0"><system-out>[[ATTACHMENT|x.webm]]</system-out><skipped/></testcase>
+  <testcase name="b" classname="C" time="0"/>
+  <testcase name="c" classname="C" time="0"/>
+</testsuite>`;
+
+      const result = parseJUnitXML(xml);
+
+      expect(result.suites[0].testcases[0].status).toBe('skipped');
+      expect(result.summary.flaky).toBe(0);
     });
 
     it('should handle string failure messages', () => {

@@ -1,0 +1,335 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuites id="" name="" tests="7" failures="1" skipped="3" errors="2" time="222.0397">
+<testsuite name="e2e/audit_manager/show/admin/export.spec.ts" timestamp="2026-11-02T19:09:50.832Z" hostname="chromium" tests="1" failures="0" skipped="1" time="0" errors="0">
+<testcase name="Audit manager show export › Export audit" classname="e2e/audit_manager/show/admin/export.spec.ts">
+<properties>
+<property name="fixme" value="">
+</property>
+</properties>
+<skipped>
+</skipped>
+</testcase>
+</testsuite>
+<testsuite name="e2e/customer_assurance/index/admin/archive.spec.ts" timestamp="2026-11-02T19:09:50.832Z" hostname="chromium" tests="2" failures="0" skipped="2" time="0" errors="0">
+<testcase name="Customer assurance archive › Archive a customer from the index" classname="e2e/customer_assurance/index/admin/archive.spec.ts">
+<properties>
+<property name="fixme" value="">
+</property>
+</properties>
+<skipped>
+</skipped>
+</testcase>
+<testcase name="Customer assurance archive › Archive a customer from its page" classname="e2e/customer_assurance/index/admin/archive.spec.ts">
+<properties>
+<property name="fixme" value="">
+</property>
+</properties>
+<skipped>
+</skipped>
+</testcase>
+</testsuite>
+<testsuite name="e2e/carbide_analyst/mcp/admin/list_pentests.spec.ts" timestamp="2026-11-02T19:09:50.832Z" hostname="chromium" tests="1" failures="1" skipped="0" time="29.477" errors="0">
+<testcase name="Carbide analyst MCP tools › Should list pentests in the organization" classname="e2e/carbide_analyst/mcp/admin/list_pentests.spec.ts" time="29.477">
+<system-out>
+<![CDATA[
+[[ATTACHMENT|../securicy-app/test-results/e2e-carbide_analyst-mcp-ad-00a9d-entests-in-the-organization-chromium/video.webm]]
+
+[[ATTACHMENT|../securicy-app/test-results/e2e-carbide_analyst-mcp-ad-00a9d-entests-in-the-organization-chromium/error-context.md]]
+
+[[ATTACHMENT|../securicy-app/test-results/e2e-carbide_analyst-mcp-ad-00a9d-entests-in-the-organization-chromium/error-context.md]]
+
+[[ATTACHMENT|../securicy-app/test-results/e2e-carbide_analyst-mcp-ad-00a9d-entests-in-the-organization-chromium/trace.zip]]
+
+[[ATTACHMENT|../securicy-app/test-results/e2e-carbide_analyst-mcp-ad-00a9d-entests-in-the-organization-chromium-retry1/video.webm]]
+
+[[ATTACHMENT|../securicy-app/test-results/e2e-carbide_analyst-mcp-ad-00a9d-entests-in-the-organization-chromium-retry1/error-context.md]]
+
+[[ATTACHMENT|../securicy-app/test-results/e2e-carbide_analyst-mcp-ad-00a9d-entests-in-the-organization-chromium-retry1/error-context.md]]
+
+[[ATTACHMENT|../securicy-app/test-results/e2e-carbide_analyst-mcp-ad-00a9d-entests-in-the-organization-chromium-retry1/trace.zip]]
+]]>
+</system-out>
+<failure message="expect(locator).toBeVisible() failed" type="expect.toBeVisible">
+<![CDATA[  [chromium] › e2e/carbide_analyst/mcp/admin/list_pentests.spec.ts:20:3 › Carbide analyst MCP tools › Should list pentests in the organization @regression @mcp 
+
+    Error: expect(locator).toBeVisible() failed
+
+    Locator: locator('#chat-container').getByText('Web Application Penetration Test')
+    Expected: visible
+    Timeout: 10000ms
+    Error: element(s) not found
+
+    Call log:
+      - Expect "toBeVisible" locator('#chat-container').getByText('Web Application Penetration Test') with timeout 10000ms
+      - waiting for locator('#chat-container').getByText('Web Application Penetration Test')
+
+
+      43 |     await expect(page.locator('#chat-container').getByText('Annual Network Penetration Test')).toBeVisible()
+      44 |
+    > 45 |     await expect(page.locator('#chat-container').getByText('Web Application Penetration Test')).toBeVisible()
+         |                                                                                                 ^
+      46 |
+      47 |     await expect(page.locator('#chat-container').getByText('Offsite Facility Penetration Test')).toBeHidden()
+      48 |   })
+        at /Users/brianbaggs/Dev/securicy-app/spec/playwright/playwright/e2e/carbide_analyst/mcp/admin/list_pentests.spec.ts:45:97
+
+    attachment #1: video (video/webm) ──────────────────────────────────────────────────────────────
+    ../../../test-results/e2e-carbide_analyst-mcp-ad-00a9d-entests-in-the-organization-chromium/video.webm
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+    Error Context: ../../../test-results/e2e-carbide_analyst-mcp-ad-00a9d-entests-in-the-organization-chromium/error-context.md
+
+    Error Context: ../../../test-results/e2e-carbide_analyst-mcp-ad-00a9d-entests-in-the-organization-chromium/error-context.md
+
+    attachment #4: trace (application/zip) ─────────────────────────────────────────────────────────
+    ../../../test-results/e2e-carbide_analyst-mcp-ad-00a9d-entests-in-the-organization-chromium/trace.zip
+    Usage:
+
+        npx playwright show-trace ../../../test-results/e2e-carbide_analyst-mcp-ad-00a9d-entests-in-the-organization-chromium/trace.zip
+
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+    Retry #1 ───────────────────────────────────────────────────────────────────────────────────────
+
+    Error: expect(locator).toBeVisible() failed
+
+    Locator: locator('#chat-container').getByText('Web Application Penetration Test')
+    Expected: visible
+    Timeout: 10000ms
+    Error: element(s) not found
+
+    Call log:
+      - Expect "toBeVisible" locator('#chat-container').getByText('Web Application Penetration Test') with timeout 10000ms
+      - waiting for locator('#chat-container').getByText('Web Application Penetration Test')
+
+
+      43 |     await expect(page.locator('#chat-container').getByText('Annual Network Penetration Test')).toBeVisible()
+      44 |
+    > 45 |     await expect(page.locator('#chat-container').getByText('Web Application Penetration Test')).toBeVisible()
+         |                                                                                                 ^
+      46 |
+      47 |     await expect(page.locator('#chat-container').getByText('Offsite Facility Penetration Test')).toBeHidden()
+      48 |   })
+        at /Users/brianbaggs/Dev/securicy-app/spec/playwright/playwright/e2e/carbide_analyst/mcp/admin/list_pentests.spec.ts:45:97
+
+    attachment #1: video (video/webm) ──────────────────────────────────────────────────────────────
+    ../../../test-results/e2e-carbide_analyst-mcp-ad-00a9d-entests-in-the-organization-chromium-retry1/video.webm
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+    Error Context: ../../../test-results/e2e-carbide_analyst-mcp-ad-00a9d-entests-in-the-organization-chromium-retry1/error-context.md
+
+    Error Context: ../../../test-results/e2e-carbide_analyst-mcp-ad-00a9d-entests-in-the-organization-chromium-retry1/error-context.md
+
+    attachment #4: trace (application/zip) ─────────────────────────────────────────────────────────
+    ../../../test-results/e2e-carbide_analyst-mcp-ad-00a9d-entests-in-the-organization-chromium-retry1/trace.zip
+    Usage:
+
+        npx playwright show-trace ../../../test-results/e2e-carbide_analyst-mcp-ad-00a9d-entests-in-the-organization-chromium-retry1/trace.zip
+
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+]]>
+</failure>
+</testcase>
+</testsuite>
+<testsuite name="e2e/data_inventory/show/admin/remediate_vendor_user.spec.ts" timestamp="2026-11-02T19:09:50.832Z" hostname="chromium" tests="1" failures="0" skipped="0" time="42.734" errors="0">
+<testcase name="Data asset show vendor user › Remediate vendor user" classname="e2e/data_inventory/show/admin/remediate_vendor_user.spec.ts" time="42.734">
+<system-out>
+<![CDATA[
+[[ATTACHMENT|../securicy-app/test-results/e2e-data_inventory-show-ad-1f79c--user-Remediate-vendor-user-chromium/video.webm]]
+
+[[ATTACHMENT|../securicy-app/test-results/e2e-data_inventory-show-ad-1f79c--user-Remediate-vendor-user-chromium/error-context.md]]
+
+[[ATTACHMENT|../securicy-app/test-results/e2e-data_inventory-show-ad-1f79c--user-Remediate-vendor-user-chromium/trace.zip]]
+]]>
+</system-out>
+</testcase>
+</testsuite>
+<testsuite name="e2e/data_inventory/index/admin/custom_filters.spec.ts" timestamp="2026-11-02T19:09:50.832Z" hostname="chromium" tests="2" failures="0" skipped="0" time="120.867" errors="2">
+<testcase name="Data inventory index filters › Custom data type filter" classname="e2e/data_inventory/index/admin/custom_filters.spec.ts" time="60.375">
+<system-out>
+<![CDATA[
+[[ATTACHMENT|../securicy-app/test-results/e2e-data_inventory-index-a-f9b89-ers-Custom-data-type-filter-chromium/error-context.md]]
+
+[[ATTACHMENT|../securicy-app/test-results/e2e-data_inventory-index-a-f9b89-ers-Custom-data-type-filter-chromium/trace.zip]]
+
+[[ATTACHMENT|../securicy-app/test-results/e2e-data_inventory-index-a-f9b89-ers-Custom-data-type-filter-chromium-retry1/error-context.md]]
+
+[[ATTACHMENT|../securicy-app/test-results/e2e-data_inventory-index-a-f9b89-ers-Custom-data-type-filter-chromium-retry1/trace.zip]]
+]]>
+</system-out>
+<error message="Test timeout of 30000ms exceeded while running &quot;beforeEach&quot; hook." type="Error">
+<![CDATA[  [chromium] › e2e/data_inventory/index/admin/custom_filters.spec.ts:37:3 › Data inventory index filters › Custom data type filter @regression 
+
+    Test timeout of 30000ms exceeded while running "beforeEach" hook.
+
+      3 | import { dataAssetsPath } from 'routes'
+      4 |
+    > 5 | test.beforeEach(async ({ browser }) => {
+        |      ^
+      6 |   await appFixtures({})
+      7 |
+      8 |   const ownerContext = await browser.newContext({ storageState: storageStatePath('default/owner_user_of_organization_0') }),
+        at /Users/brianbaggs/Dev/securicy-app/spec/playwright/playwright/e2e/data_inventory/index/admin/custom_filters.spec.ts:5:6
+
+    Error: locator.click: Test ended.
+    Call log:
+      - waiting for getByRole('link', { name: 'Import Data Assets' })
+        - locator resolved to <a data-turbo-frame="modal" href="/data_assets/imports/new" data-action="click->dropdown#toggle">…</a>
+      - attempting click action
+        - waiting for element to be visible, enabled and stable
+      - element was detached from the DOM, retrying
+
+
+      13 |   await page.getByRole('button', { name: 'Add New' }).click()
+      14 |
+    > 15 |   await page.getByRole('link', { name: 'Import Data Assets' }).click()
+         |                                                                ^
+      16 |
+      17 |   const [fileUpload] = await Promise.all([
+      18 |     page.waitForEvent('filechooser'),
+        at /Users/brianbaggs/Dev/securicy-app/spec/playwright/playwright/e2e/data_inventory/index/admin/custom_filters.spec.ts:15:64
+
+    Error Context: ../../../test-results/e2e-data_inventory-index-a-f9b89-ers-Custom-data-type-filter-chromium/error-context.md
+
+    attachment #2: trace (application/zip) ─────────────────────────────────────────────────────────
+    ../../../test-results/e2e-data_inventory-index-a-f9b89-ers-Custom-data-type-filter-chromium/trace.zip
+    Usage:
+
+        npx playwright show-trace ../../../test-results/e2e-data_inventory-index-a-f9b89-ers-Custom-data-type-filter-chromium/trace.zip
+
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+    Retry #1 ───────────────────────────────────────────────────────────────────────────────────────
+
+    Test timeout of 30000ms exceeded while running "beforeEach" hook.
+
+      3 | import { dataAssetsPath } from 'routes'
+      4 |
+    > 5 | test.beforeEach(async ({ browser }) => {
+        |      ^
+      6 |   await appFixtures({})
+      7 |
+      8 |   const ownerContext = await browser.newContext({ storageState: storageStatePath('default/owner_user_of_organization_0') }),
+        at /Users/brianbaggs/Dev/securicy-app/spec/playwright/playwright/e2e/data_inventory/index/admin/custom_filters.spec.ts:5:6
+
+    Error: locator.click: Test ended.
+    Call log:
+      - waiting for getByRole('link', { name: 'Import Data Assets' })
+
+
+      13 |   await page.getByRole('button', { name: 'Add New' }).click()
+      14 |
+    > 15 |   await page.getByRole('link', { name: 'Import Data Assets' }).click()
+         |                                                                ^
+      16 |
+      17 |   const [fileUpload] = await Promise.all([
+      18 |     page.waitForEvent('filechooser'),
+        at /Users/brianbaggs/Dev/securicy-app/spec/playwright/playwright/e2e/data_inventory/index/admin/custom_filters.spec.ts:15:64
+
+    Error Context: ../../../test-results/e2e-data_inventory-index-a-f9b89-ers-Custom-data-type-filter-chromium-retry1/error-context.md
+
+    attachment #2: trace (application/zip) ─────────────────────────────────────────────────────────
+    ../../../test-results/e2e-data_inventory-index-a-f9b89-ers-Custom-data-type-filter-chromium-retry1/trace.zip
+    Usage:
+
+        npx playwright show-trace ../../../test-results/e2e-data_inventory-index-a-f9b89-ers-Custom-data-type-filter-chromium-retry1/trace.zip
+
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+]]>
+</error>
+</testcase>
+<testcase name="Data inventory index filters › Custom data classification filter" classname="e2e/data_inventory/index/admin/custom_filters.spec.ts" time="60.492">
+<system-out>
+<![CDATA[
+[[ATTACHMENT|../securicy-app/test-results/e2e-data_inventory-index-a-3e992--data-classification-filter-chromium/error-context.md]]
+
+[[ATTACHMENT|../securicy-app/test-results/e2e-data_inventory-index-a-3e992--data-classification-filter-chromium/trace.zip]]
+
+[[ATTACHMENT|../securicy-app/test-results/e2e-data_inventory-index-a-3e992--data-classification-filter-chromium-retry1/error-context.md]]
+
+[[ATTACHMENT|../securicy-app/test-results/e2e-data_inventory-index-a-3e992--data-classification-filter-chromium-retry1/trace.zip]]
+]]>
+</system-out>
+<error message="Test timeout of 30000ms exceeded while running &quot;beforeEach&quot; hook." type="Error">
+<![CDATA[  [chromium] › e2e/data_inventory/index/admin/custom_filters.spec.ts:71:3 › Data inventory index filters › Custom data classification filter @regression 
+
+    Test timeout of 30000ms exceeded while running "beforeEach" hook.
+
+      3 | import { dataAssetsPath } from 'routes'
+      4 |
+    > 5 | test.beforeEach(async ({ browser }) => {
+        |      ^
+      6 |   await appFixtures({})
+      7 |
+      8 |   const ownerContext = await browser.newContext({ storageState: storageStatePath('default/owner_user_of_organization_0') }),
+        at /Users/brianbaggs/Dev/securicy-app/spec/playwright/playwright/e2e/data_inventory/index/admin/custom_filters.spec.ts:5:6
+
+    Error: locator.click: Test ended.
+    Call log:
+      - waiting for getByRole('link', { name: 'Import Data Assets' })
+
+
+      13 |   await page.getByRole('button', { name: 'Add New' }).click()
+      14 |
+    > 15 |   await page.getByRole('link', { name: 'Import Data Assets' }).click()
+         |                                                                ^
+      16 |
+      17 |   const [fileUpload] = await Promise.all([
+      18 |     page.waitForEvent('filechooser'),
+        at /Users/brianbaggs/Dev/securicy-app/spec/playwright/playwright/e2e/data_inventory/index/admin/custom_filters.spec.ts:15:64
+
+    Error Context: ../../../test-results/e2e-data_inventory-index-a-3e992--data-classification-filter-chromium/error-context.md
+
+    attachment #2: trace (application/zip) ─────────────────────────────────────────────────────────
+    ../../../test-results/e2e-data_inventory-index-a-3e992--data-classification-filter-chromium/trace.zip
+    Usage:
+
+        npx playwright show-trace ../../../test-results/e2e-data_inventory-index-a-3e992--data-classification-filter-chromium/trace.zip
+
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+    Retry #1 ───────────────────────────────────────────────────────────────────────────────────────
+
+    Test timeout of 30000ms exceeded while running "beforeEach" hook.
+
+      3 | import { dataAssetsPath } from 'routes'
+      4 |
+    > 5 | test.beforeEach(async ({ browser }) => {
+        |      ^
+      6 |   await appFixtures({})
+      7 |
+      8 |   const ownerContext = await browser.newContext({ storageState: storageStatePath('default/owner_user_of_organization_0') }),
+        at /Users/brianbaggs/Dev/securicy-app/spec/playwright/playwright/e2e/data_inventory/index/admin/custom_filters.spec.ts:5:6
+
+    Error: locator.click: Test ended.
+    Call log:
+      - waiting for getByRole('link', { name: 'Import Data Assets' })
+        - locator resolved to <a data-turbo-frame="modal" href="/data_assets/imports/new" data-action="click->dropdown#toggle">…</a>
+      - attempting click action
+        - waiting for element to be visible, enabled and stable
+      - element was detached from the DOM, retrying
+
+
+      13 |   await page.getByRole('button', { name: 'Add New' }).click()
+      14 |
+    > 15 |   await page.getByRole('link', { name: 'Import Data Assets' }).click()
+         |                                                                ^
+      16 |
+      17 |   const [fileUpload] = await Promise.all([
+      18 |     page.waitForEvent('filechooser'),
+        at /Users/brianbaggs/Dev/securicy-app/spec/playwright/playwright/e2e/data_inventory/index/admin/custom_filters.spec.ts:15:64
+
+    Error Context: ../../../test-results/e2e-data_inventory-index-a-3e992--data-classification-filter-chromium-retry1/error-context.md
+
+    attachment #2: trace (application/zip) ─────────────────────────────────────────────────────────
+    ../../../test-results/e2e-data_inventory-index-a-3e992--data-classification-filter-chromium-retry1/trace.zip
+    Usage:
+
+        npx playwright show-trace ../../../test-results/e2e-data_inventory-index-a-3e992--data-classification-filter-chromium-retry1/trace.zip
+
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+]]>
+</error>
+</testcase>
+</testsuite>
+</testsuites>

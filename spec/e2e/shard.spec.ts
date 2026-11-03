@@ -1,4 +1,4 @@
-import { stat } from 'node:fs/promises'
+import { readFile, stat } from 'node:fs/promises'
 import { test, expect } from './baseFixtures'
 
 test.beforeEach(async ({ page }) => {
@@ -41,7 +41,7 @@ test.describe('Shard E2E Tests', () => {
     await expect(fileDownload.suggestedFilename()).toBe('test-results-combined.xml')
 
     const filePath = await fileDownload.path()
-    await expect(stat(filePath!)).resolves.toMatchObject({ size: 38158 })
+    await expect(stat(filePath!)).resolves.toMatchObject({ size: 38197 })
 
     await page.getByRole('button', { name: 'View in Dashboard' }).click()
 
@@ -52,6 +52,60 @@ test.describe('Shard E2E Tests', () => {
     await expect(page.getByTestId('stat-failed')).toContainText('4Failed')
 
     await expect(page.getByTestId('stat-skipped')).toContainText('1Skipped')
+  })
+
+  test('should keep skipped markers, attachment output and run time intact when combining real-shaped shards', async ({ page }) => {
+    await page.getByRole('button', { name: 'Shard' }).click()
+
+    const [fileUpload] = await Promise.all([
+      page.waitForEvent('filechooser'),
+      page.getByRole('button', { name: 'Choose XML Files' }).click()
+    ])
+
+    await fileUpload.setFiles([
+      './spec/testfiles/test-results-shard-real-1.xml',
+      './spec/testfiles/test-results-shard-real-2.xml'
+    ])
+
+    await expect(page.getByText('test-results-shard-real-2.xml')).toBeVisible()
+
+    await page.getByRole('button', { name: 'Combine Shards' }).click()
+
+    await expect(page.getByTestId('shard-result')).toContainText('Combined 32 tests (4 failed) from 2 files across 9 suites.')
+
+    const [fileDownload] = await Promise.all([
+      page.waitForEvent('download'),
+      page.getByRole('button', { name: 'Download Combined XML' }).click()
+    ])
+
+    const combined = await readFile((await fileDownload.path())!, 'utf8')
+
+    // Root totals: counts are summed, and run time is the two shards' own root times
+    // added together (222.0397 + 160.54115), not just the sum of the suites' times (332.679).
+    expect(combined).toMatch(/<testsuites [^>]*tests="32"[^>]*failures="2"[^>]*errors="2"[^>]*skipped="5"[^>]*time="382\.581"/)
+
+    // Skipped markers, <system-out> attachments and failure/error bodies are carried over as
+    // child elements — the 5 skipped tests, the 6 attachment outputs and the 4 failures from the
+    // source shards — never flattened into attributes on <testcase>.
+    expect(combined.match(/<skipped\b/g)).toHaveLength(5)
+    expect(combined.match(/<system-out>/g)).toHaveLength(6)
+    expect(combined.match(/<(failure|error)\b/g)).toHaveLength(4)
+    expect(combined).not.toMatch(/<testcase[^>]*\s(skipped|system-out|properties)=/)
+
+    // Stack traces and attachment output stay wrapped in CDATA exactly as in the source shards,
+    // so they load back with their original indentation and trailing newlines.
+    const cdataIn = async (path: string) => ((await readFile(path, 'utf8')).match(/<!\[CDATA\[/g) ?? []).length
+    const sourceCdata = (await cdataIn('./spec/testfiles/test-results-shard-real-1.xml')) + (await cdataIn('./spec/testfiles/test-results-shard-real-2.xml'))
+    expect(sourceCdata).toBeGreaterThan(0)
+    expect(combined.match(/<!\[CDATA\[/g)).toHaveLength(sourceCdata)
+
+    await page.getByRole('button', { name: 'View in Dashboard' }).click()
+
+    await expect(page.getByTestId('stat-failed')).toContainText('4Failed')
+
+    await expect(page.getByTestId('stat-skipped')).toContainText('5Skipped')
+
+    await expect(page.getByTestId('stat-flaky')).toContainText('2')
   })
 
   test('should remove an uploaded shard before combining', async ({ page }) => {

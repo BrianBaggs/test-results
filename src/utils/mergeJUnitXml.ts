@@ -1,8 +1,33 @@
 import { XMLParser, XMLBuilder } from 'fast-xml-parser';
 
-// Matches src/utils/xmlParser.js's reader options exactly, so a testsuite
-// carried through unchanged parses back to the identical shape.
-const PARSER_OPTIONS = { ignoreAttributes: false, attributeNamePrefix: '' };
+// Attributes get a real prefix here, unlike src/utils/xmlParser.ts (which uses
+// '' so attributes and child elements share one flat object). That flat shape is
+// fine for reading but can't be written back: with no prefix the builder can't
+// tell a text-only child element from an attribute, so <skipped/>, <system-out>
+// and <properties/> were emitted as attributes on <testcase> — silently turning
+// every skipped test into a passed one and moving each failure's attachments
+// out of <system-out>. The prefix keeps the two apart through the round trip.
+// parseTagValue is off so element text (e.g. <system-out>) stays an exact string
+// instead of being coerced to a number/boolean. CDATA sections (how Playwright wraps
+// failure stack traces and attachment output) are kept as CDATA: the app's parser
+// trims plain text but not CDATA, so flattening one to text would silently strip the
+// trace's leading indentation and trailing newline when the merged file is loaded.
+const ATTR = '@_';
+const CDATA = '__cdata';
+const PARSER_OPTIONS = { ignoreAttributes: false, attributeNamePrefix: ATTR, parseTagValue: false, cdataPropName: CDATA };
+// Fallback for the one shape CDATA-preserving can't round-trip: an element mixing plain
+// text with a CDATA section loses the order of the two. No JUnit reporter writes that, but
+// a file containing it is parsed with CDATA folded into text (correct order, only the
+// edge whitespace the app trims anyway is lost) rather than silently reordered.
+const FLAT_PARSER_OPTIONS = { ...PARSER_OPTIONS, cdataPropName: false as const };
+
+function hasMixedCdata(node: unknown): boolean {
+  if (Array.isArray(node)) return node.some(hasMixedCdata);
+  if (node === null || typeof node !== 'object') return false;
+  const obj = node as XmlNode;
+  if (obj[CDATA] !== undefined && obj['#text'] !== undefined) return true;
+  return Object.values(obj).some(hasMixedCdata);
+}
 
 type XmlNode = Record<string, unknown>;
 
@@ -10,6 +35,8 @@ function toArray(value: unknown): XmlNode[] {
   if (value === undefined) return [];
   return Array.isArray(value) ? (value as XmlNode[]) : [value as XmlNode];
 }
+
+const attrOf = (node: XmlNode, field: string): unknown => node[`${ATTR}${field}`];
 
 function numberOf(value: unknown): number {
   const n = parseFloat(String(value ?? '0'));
@@ -36,7 +63,9 @@ export interface MergeResult {
  * <testsuite> blocks are expected to be disjoint: every testsuite from every
  * file is kept as-is and concatenated under one <testsuites> root, with
  * root-level totals recomputed as a sum across all of them rather than
- * trusted from any one file.
+ * trusted from any one file. Run time is summed from each file's own root
+ * `time` (falling back to its suites' times when it has none), so the result
+ * equals the shards' reported times added together.
  *
  * The one exception is a suite that reappears, byte-for-byte identical,
  * across more than one file (the same shard re-uploaded, or two shards that
@@ -55,24 +84,33 @@ export function mergeJUnitXml(files: JUnitXmlFile[]): MergeResult {
   if (files.length === 0) throw new Error('No files to combine.');
 
   const parser = new XMLParser(PARSER_OPTIONS);
+  const flatParser = new XMLParser(FLAT_PARSER_OPTIONS);
   const warnings: string[] = [];
   let rootAttrs: XmlNode = {};
   let haveRootAttrs = false;
   // Every suite collected in file order, tagged with which file (by index,
   // not name — two uploads can share a filename) it came from.
   const collected: Array<{ suite: XmlNode; fileIndex: number }> = [];
+  // Each file's own root-level run time, when it has a <testsuites time="…"> wrapper.
+  // Playwright's root time is larger than the sum of its suites' times (it includes
+  // retry attempts), so it — not the suite sum — is what a single unsharded run's
+  // root would have reported, and what summing the shards must reproduce.
+  const rootTimes: Array<number | undefined> = [];
 
   files.forEach((file, fileIndex) => {
-    const parsed = parser.parse(file.xml) as { testsuites?: XmlNode; testsuite?: unknown };
+    let parsed = parser.parse(file.xml) as { testsuites?: XmlNode; testsuite?: unknown };
+    if (hasMixedCdata(parsed)) parsed = flatParser.parse(file.xml) as typeof parsed;
     let suites: XmlNode[];
     if (parsed.testsuites) {
       const { testsuite, ...attrs } = parsed.testsuites;
+      rootTimes[fileIndex] = attrs[`${ATTR}time`] !== undefined ? numberOf(attrs[`${ATTR}time`]) : undefined;
       if (!haveRootAttrs) {
         rootAttrs = attrs;
         haveRootAttrs = true;
       }
       suites = toArray(testsuite);
     } else if (parsed.testsuite) {
+      rootTimes[fileIndex] = undefined;
       suites = toArray(parsed.testsuite);
     } else {
       throw new Error(`"${file.name}": Invalid JUnit XML format`);
@@ -86,10 +124,14 @@ export function mergeJUnitXml(files: JUnitXmlFile[]): MergeResult {
   // below, which uses this set to avoid also warning about the very same
   // duplication one suite at a time.
   const identicalFilePairs = new Set<string>();
+  // The later file of each identical pair: its whole contribution (root time included)
+  // is a duplicate, not just its suites.
+  const duplicateFiles = new Set<number>();
   for (let i = 0; i < files.length; i++) {
     for (let j = i + 1; j < files.length; j++) {
       if (files[i].xml.trim() === files[j].xml.trim()) {
         identicalFilePairs.add(`${i}|${j}`);
+        duplicateFiles.add(j);
         warnings.push(
           `"${files[i].name}" and "${files[j].name}" are byte-for-byte identical — the duplicate's suites were counted once, not twice.`
         );
@@ -99,7 +141,7 @@ export function mergeJUnitXml(files: JUnitXmlFile[]): MergeResult {
 
   const byName = new Map<string, Array<{ suite: XmlNode; fileIndex: number; position: number }>>();
   collected.forEach(({ suite, fileIndex }, position) => {
-    const name = suite.name !== undefined ? String(suite.name) : '';
+    const name = attrOf(suite, 'name') !== undefined ? String(attrOf(suite, 'name')) : '';
     if (name === '') return;
     if (!byName.has(name)) byName.set(name, []);
     byName.get(name)!.push({ suite, fileIndex, position });
@@ -137,22 +179,36 @@ export function mergeJUnitXml(files: JUnitXmlFile[]): MergeResult {
 
   const allSuites = collected.filter((_, position) => !dropPositions.has(position)).map((e) => e.suite);
 
-  const omit = new Set(['testsuite', 'tests', 'failures', 'errors', 'skipped', 'time']);
-  const baseAttrs = Object.fromEntries(Object.entries(rootAttrs).filter(([k]) => !omit.has(k)));
-  const sumAttr = (field: string) => allSuites.reduce((total, s) => total + numberOf(s[field]), 0);
+  // Run time: each file contributes its root time (or, with no root, its suites' times),
+  // minus any suite dropped as an exact duplicate so it isn't counted a second time. A
+  // wholly identical file contributes nothing.
+  const timeOfSuite = (suite: XmlNode) => numberOf(attrOf(suite, 'time'));
+  let totalTime = 0;
+  files.forEach((_, fileIndex) => {
+    if (duplicateFiles.has(fileIndex)) return;
+    const fileSuites = collected.map((c, position) => ({ ...c, position })).filter((c) => c.fileIndex === fileIndex);
+    const suiteSum = fileSuites.reduce((total, c) => total + timeOfSuite(c.suite), 0);
+    const droppedSum = fileSuites.filter((c) => dropPositions.has(c.position)).reduce((total, c) => total + timeOfSuite(c.suite), 0);
+    totalTime += Math.max(0, (rootTimes[fileIndex] ?? suiteSum) - droppedSum);
+  });
 
-  const builder = new XMLBuilder({ ignoreAttributes: false, attributeNamePrefix: '', format: true });
-  const xml = builder.build({
+  const omit = new Set(['testsuite', ...['tests', 'failures', 'errors', 'skipped', 'time'].map((k) => `${ATTR}${k}`)]);
+  const baseAttrs = Object.fromEntries(Object.entries(rootAttrs).filter(([k]) => !omit.has(k)));
+  const sumAttr = (field: string) => allSuites.reduce((total, s) => total + numberOf(attrOf(s, field)), 0);
+
+  const builder = new XMLBuilder({ ignoreAttributes: false, attributeNamePrefix: ATTR, cdataPropName: CDATA, format: true });
+  // The parser drops the source files' <?xml?> declaration, so write one back.
+  const xml = `<?xml version="1.0" encoding="UTF-8"?>\n${builder.build({
     testsuites: {
       ...baseAttrs,
-      tests: String(sumAttr('tests')),
-      failures: String(sumAttr('failures')),
-      errors: String(sumAttr('errors')),
-      skipped: String(sumAttr('skipped')),
-      time: sumAttr('time').toFixed(3),
+      [`${ATTR}tests`]: String(sumAttr('tests')),
+      [`${ATTR}failures`]: String(sumAttr('failures')),
+      [`${ATTR}errors`]: String(sumAttr('errors')),
+      [`${ATTR}skipped`]: String(sumAttr('skipped')),
+      [`${ATTR}time`]: totalTime.toFixed(3),
       ...(allSuites.length > 0 ? { testsuite: allSuites.length === 1 ? allSuites[0] : allSuites } : {}),
     },
-  });
+  })}`;
 
   return {
     xml,
