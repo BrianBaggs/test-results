@@ -46,6 +46,9 @@ const FAKE_YARN = `#!/bin/sh
 echo "args: $@" >> "$FAKE_LOG"
 echo "pwd: $PWD" >> "$FAKE_LOG"
 if [ -L node_modules ] && [ -e node_modules/marker.txt ]; then echo "node_modules: linked" >> "$FAKE_LOG"; else echo "node_modules: MISSING" >> "$FAKE_LOG"; fi
+echo "routes: $(cat app/javascript/routes.js 2>/dev/null || echo MISSING)" >> "$FAKE_LOG"
+echo "routes-types: $(cat app/javascript/routes.d.ts 2>/dev/null || echo MISSING)" >> "$FAKE_LOG"
+if [ -e config/master.key ] || [ -e config/database.yml ]; then echo "private-config: LEAKED" >> "$FAKE_LOG"; else echo "private-config: none" >> "$FAKE_LOG"; fi
 echo "server-fixture: $(cat "$FAKE_SERVER_FIXTURE" 2>/dev/null)" >> "$FAKE_LOG"
 echo "server-cassette: $(cat "$FAKE_SERVER_CASSETTE" 2>/dev/null)" >> "$FAKE_LOG"
 echo "leak: \${GH_TOKEN:-none}|\${SLACK_WEBHOOK_URL:-none}" >> "$FAKE_LOG"
@@ -122,10 +125,19 @@ function makeFixture(): Fx {
   git(root, 'clone', '-q', origin, app);
   for (const [k, v] of [['user.name', 'QA'], ['user.email', 'qa@example.com'], ['commit.gpgsign', 'false']]) git(app, 'config', k, v);
   put(app, 'node_modules/marker.txt', 'real node_modules');
+  // generated + gitignored in a real checkout, so not in the temporary one unless it is copied
+  put(app, 'app/javascript/routes.js', 'export const routes = "from the app checkout"\n');
+  put(app, 'app/javascript/routes.d.ts', 'export declare const routes: string\n');
+  put(app, '.git/info/exclude', '/app/javascript/routes.js\n/app/javascript/routes.d.ts\n'); // gitignored, as in securicy-app
 
   // the Rails test server's own checkout (what it reads fixtures from)
   put(server, FIXTURE, 'users: SERVER version (with an uncommitted edit)\n');
   put(server, 'spec/other.yml', 'untouched');
+  put(server, 'app/javascript/routes.js', 'export const routes = "from the test server checkout"\n');
+  put(server, 'app/javascript/routes.d.ts', 'export declare const routes: string\n');
+  // Rails secrets/config: present in every real checkout, and must never be copied anywhere
+  put(server, 'config/master.key', 'private file, never copied\n');
+  put(server, 'config/database.yml', 'private file, never copied\n');
 
   writeFileSync(join(bin, 'yarn'), FAKE_YARN);
   chmodSync(join(bin, 'yarn'), 0o755);
@@ -394,6 +406,85 @@ describe('a full run', () => {
     const { id } = await svc.startSpecRun({ branch: 'AT-5-add-specs', expectedSha: await branchSha(svc), specs: [SPEC_A] });
     const done = await waitFor(svc, id);
     expect((await svc.cancelSpecRun(id)).status).toBe(done.status);
+  });
+});
+
+describe('generated files the specs import (app/javascript/routes.js)', () => {
+  const run = async (svc: Svc) => {
+    const { id } = await svc.startSpecRun({ branch: 'AT-5-add-specs', expectedSha: await branchSha(svc), specs: 'all' });
+    return waitFor(svc, id);
+  };
+
+  it('puts routes.js and routes.d.ts in the temporary checkout before the specs start, from the test server checkout', async () => {
+    const job = await run(makeService());
+    expect(job.status).toBe('passed');
+    const seen = readFileSync(fx.log, 'utf8');
+    expect(seen).toContain('routes: export const routes = "from the test server checkout"');
+    expect(seen).toContain('routes-types: export declare const routes: string');
+  });
+
+  it('copies ONLY those files: Rails secrets and config never reach the temporary checkout', async () => {
+    await run(makeService());
+    expect(readFileSync(fx.log, 'utf8')).toContain('private-config: none');
+  });
+
+  it('leaves your checkouts exactly as they were', async () => {
+    const svc = makeService();
+    const files = (base: string) => Object.fromEntries(Object.entries(tree(base)).filter(([k]) => !k.startsWith('.git/')));
+    const before = { server: files(fx.server), app: files(fx.app), status: git(fx.app, 'status', '--short') };
+    await run(svc);
+    expect(files(fx.server)).toEqual(before.server);
+    expect(files(fx.app)).toEqual(before.app);
+    expect(git(fx.app, 'status', '--short')).toBe(before.status);
+  });
+
+  it('falls back to the reviewed repo\'s copy when the test server checkout has none', async () => {
+    rmSync(join(fx.server, 'app'), { recursive: true });
+    expect((await run(makeService())).status).toBe('passed');
+    expect(readFileSync(fx.log, 'utf8')).toContain('routes: export const routes = "from the app checkout"');
+  });
+
+  it('routes.d.ts is optional (types only)', async () => {
+    rmSync(join(fx.server, 'app/javascript/routes.d.ts'));
+    rmSync(join(fx.app, 'app/javascript/routes.d.ts'));
+    expect((await run(makeService())).status).toBe('passed');
+    expect(readFileSync(fx.log, 'utf8')).toContain('routes-types: MISSING');
+  });
+
+  it('a missing routes.js stops before anything runs, says how to generate it, and cleans up', async () => {
+    rmSync(join(fx.server, 'app'), { recursive: true });
+    rmSync(join(fx.app, 'app'), { recursive: true });
+    const svc = makeService();
+    const serverBefore = tree(fx.server);
+    const job = await run(svc);
+
+    expect(job.status).toBe('error');
+    expect(job.error).toMatch(/app\/javascript\/routes\.js was not found/);
+    expect(job.error).toContain('bundle exec rails js:routes');
+    expect(existsSync(fx.log)).toBe(false); // nothing was run
+    expect(tree(fx.server)).toEqual(serverBefore); // no fixtures were copied into the server first
+    expect(leftovers()).toEqual({ worktrees: 1, tempCheckouts: 0, journals: 0 });
+  });
+
+  it('refuses a symlinked routes.js instead of following it', async () => {
+    rmSync(join(fx.server, 'app/javascript/routes.js'));
+    rmSync(join(fx.app, 'app'), { recursive: true });
+    writeFileSync(join(fx.root, 'elsewhere.js'), 'export const routes = "somewhere else"\n');
+    symlinkSync(join(fx.root, 'elsewhere.js'), join(fx.server, 'app/javascript/routes.js'));
+    const job = await run(makeService());
+    expect(job.status).toBe('error');
+    expect(job.error).toMatch(/symlink/);
+    expect(existsSync(fx.log)).toBe(false);
+    expect(leftovers()).toEqual({ worktrees: 1, tempCheckouts: 0, journals: 0 });
+  });
+
+  it('a routes.js the PR itself commits is left alone', async () => {
+    git(fx.seed, 'checkout', '-q', 'AT-5-add-specs');
+    put(fx.seed, 'app/javascript/routes.js', 'export const routes = "committed by the PR"\n');
+    commit(fx.seed, 'AT-5 commit routes');
+    git(fx.seed, 'push', '-q', 'origin', 'AT-5-add-specs');
+    expect((await run(makeService())).status).toBe('passed');
+    expect(readFileSync(fx.log, 'utf8')).toContain('routes: export const routes = "committed by the PR"');
   });
 });
 

@@ -126,7 +126,12 @@ test server, which this app never starts for you:
   button.
 - The specs run from a temporary checkout of the exact commit you reviewed
   (`yarn playwright test -c spec/playwright/playwright.config.js <specs>`, one
-  worker, no retries), so your own checkout is not touched. A modal shows
+  worker, no retries), so your own checkout is not touched. A temporary checkout
+  only has what git tracks, so `node_modules` is linked in and the generated,
+  gitignored `app/javascript/routes.js` (and `routes.d.ts`) the specs import are
+  copied from your checkout. Only those two files are ever copied (never Rails
+  secrets like `config/master.key`); if `routes.js` is missing the run stops with
+  a message to run `bundle exec rails js:routes`. A modal shows
   progress, the live output, ✓/✗ per spec and test, and the error message, code
   snippet and stack trace for each failure. Cancel is safe at any point.
 - Fixtures and VCR cassettes the PR changes (`.yml`/`.yaml`/`.json` under

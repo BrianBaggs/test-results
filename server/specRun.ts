@@ -5,6 +5,7 @@ import { TEMP_WORKTREE_PREFIX } from './gitGuard.ts';
 import { redactSecrets } from './redact.ts';
 import { ReviewError } from './reviewError.ts';
 import { OverlayError, applyOverlay, planOverlay, restoreOverlay } from './serverOverlay.ts';
+import { copyGeneratedFiles } from './generatedFiles.ts';
 import type { ChangedFile, OverlayManifest } from './serverOverlay.ts';
 import {
   DEFAULT_TEST_SERVER_PORT,
@@ -214,6 +215,8 @@ export function createSpecRunService(ctx: SpecRunContext) {
       if (!existsSync(modules)) throw new Error(`node_modules was not found in ${ctx.repoPath}. Run \`yarn install\` there first.`);
       if (lstatSync(modules).isSymbolicLink()) throw new Error('node_modules in the securicy-app checkout is a symlink; refusing to link it.');
       symlinkSync(modules, join(dir, 'node_modules'), 'dir');
+      // generated, gitignored files the specs import (routes.js); done before anything is copied into the server
+      copyGeneratedFiles({ workspaceDir: dir, roots: [ctx.serverRoot, ctx.repoPath] });
       if (job.cancelled) return;
 
       // ---- 2. the PR's fixtures/cassettes into the server's checkout
