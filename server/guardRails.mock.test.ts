@@ -34,6 +34,9 @@ const h = vi.hoisted(() => ({
   approval: 'approved' as 'approved' | 'declined' | null,
   info: '',
   edits: [] as Array<Record<string, unknown>>,
+  /** What `git rev-list --merges --count base..HEAD` answers, and whether base is an ancestor of HEAD. */
+  mergeCommits: '0\n',
+  onTop: true,
 }));
 
 vi.mock('node:child_process', () => ({
@@ -128,7 +131,10 @@ h.respond = function respond(bin, args): FakeResult {
       if (r[0] === 'HEAD') return { stdout: `${NEW_HEAD}\n` };
       return { stdout: `${r[2]?.startsWith('origin/playwright-main') ? BASE_SHA : BRANCH_SHA}\n` };
     case 'rev-list':
+      if (r[0] === '--merges') return { stdout: h.mergeCommits };
       return { stdout: r[0] === '--left-right' ? '1\t1\n' : '1\n' };
+    case 'merge-base':
+      return { code: h.onTop ? 0 : 1 };
     case 'cherry':
       return { stdout: `+ ${'c'.repeat(40)}\n` };
     case 'log':
@@ -209,7 +215,7 @@ function auditEverything() {
     gitCalls().map((c) => c.args[0]),
     'only these git subcommands are ever used',
   ).toSatisfy((cmds: string[]) =>
-    cmds.every((c) => ['rev-parse', 'remote', 'fetch', 'for-each-ref', 'rev-list', 'cherry', 'log', 'diff', 'merge-tree', 'worktree', 'rebase', 'push'].includes(c)),
+    cmds.every((c) => ['rev-parse', 'remote', 'fetch', 'for-each-ref', 'rev-list', 'merge-base', 'cherry', 'log', 'diff', 'merge-tree', 'worktree', 'rebase', 'push'].includes(c)),
   );
 }
 
@@ -219,6 +225,8 @@ beforeEach(() => {
   h.approval = 'approved';
   h.info = '';
   h.edits.length = 0;
+  h.mergeCommits = '0\n';
+  h.onTop = true;
 });
 
 afterAll(() => {
@@ -268,6 +276,44 @@ describe('guard rails, audited through mocked processes', () => {
       // the temp worktree is always cleaned up
       expect(gitCalls().some((c) => c.args[0] === 'worktree' && c.args[1] === 'remove' && c.args[3] === dir)).toBe(true);
       expect(existsSync(dir)).toBe(false);
+    });
+
+    it('rebases, then proves the result is a straight line on top of the base, and only then pushes', async () => {
+      const svc = makeService();
+      const detail = await svc.detail('AT-727-add-test');
+      await svc.merge({ branch: 'AT-727-add-test', expectedSha: detail.sha });
+
+      const calls = gitCalls();
+      const at = (pred: (c: { args: string[] }) => boolean) => calls.findIndex(pred);
+      const rebase = at((c) => c.args[0] === 'rebase');
+      const onTop = at((c) => c.args[0] === 'merge-base');
+      const noMerges = at((c) => c.args[0] === 'rev-list' && c.args[1] === '--merges');
+      const push = at((c) => c.args[0] === 'push');
+
+      expect(calls[onTop].args).toEqual(['merge-base', '--is-ancestor', 'origin/playwright-main', 'HEAD']);
+      expect(calls[noMerges].args).toEqual(['rev-list', '--merges', '--count', 'origin/playwright-main..HEAD']);
+      expect(rebase).toBeGreaterThan(-1);
+      expect(rebase).toBeLessThan(onTop);
+      expect(rebase).toBeLessThan(noMerges);
+      expect(onTop).toBeLessThan(push);
+      expect(noMerges).toBeLessThan(push);
+      expect(calls.some((c) => c.args[0] === 'merge')).toBe(false); // `git merge` is never run
+    });
+
+    it.each([
+      ['a merge commit in what would be pushed', { mergeCommits: '2\n', onTop: true }, /contains 2 merge commits/],
+      ['a result that is not on top of the latest base', { mergeCommits: '0\n', onTop: false }, /does not sit on top of the latest commit/],
+    ])('refuses to push %s: nothing is pushed, deleted or moved in Jira', async (_name, state, message) => {
+      h.mergeCommits = state.mergeCommits;
+      h.onTop = state.onTop;
+      const svc = makeService();
+      const detail = await svc.detail('AT-727-add-test');
+
+      await expect(svc.merge({ branch: 'AT-727-add-test', expectedSha: detail.sha, moveToDone: true })).rejects.toMatchObject({ status: 409, message });
+
+      expect(gitCalls().some((c) => c.args[0] === 'push')).toBe(false);
+      expect(h.spawned.some((c) => c.bin === 'acli' && c.args[2] === 'transition')).toBe(false);
+      expect(gitCalls().some((c) => c.args[0] === 'worktree' && c.args[1] === 'remove')).toBe(true); // still cleaned up
     });
 
     it('moves the Jira ticket only AFTER the push, and only that AT ticket', async () => {

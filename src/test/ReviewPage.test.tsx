@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, beforeAll } from 'vitest';
-import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, within, act } from '@testing-library/react';
 import { toast } from 'sonner';
 import { ReviewPage } from '../components/Review/ReviewPage';
 import { ReviewApiError, fetchGhStatus, fetchReviewDetail, fetchReviewList, fetchReviewStatus, fetchTestServer, mergeReview, submitReviewDecision } from '../utils/reviewApi';
@@ -62,7 +62,13 @@ async function decide(kind: 'approve' | 'decline', info?: string) {
 }
 const approve = () => decide('approve');
 /** The second click: GitHub-style inline confirmation. */
-const confirmMerge = async () => fireEvent.click(within(await screen.findByTestId('merge-confirm')).getByRole('button', { name: 'Confirm rebase and merge' }));
+const confirmMerge = async () => {
+  const confirm = within(await screen.findByTestId('merge-confirm')).getByRole('button', { name: 'Confirm rebase and merge' });
+  // The merge settles asynchronously (mocked request, toasts, navigation); keep all of it inside act.
+  await act(async () => {
+    fireEvent.click(confirm);
+  });
+};
 const openTab = (name: RegExp | string) => fireEvent.click(screen.getByRole('tab', { name }));
 
 async function approveAndMerge() {
@@ -1134,6 +1140,91 @@ describe('Pull request show page: rebase and merge', () => {
     expect(mergeMock).toHaveBeenCalledTimes(1);
     resolve(mergeResult());
     await screen.findByTestId('review-table');
+  });
+
+  describe('accidental double activation of the merge button', () => {
+    async function openConfirmation() {
+      await openReview();
+      await approve();
+      fireEvent.click(mergeButton());
+      return within(await screen.findByTestId('merge-confirm')).getByRole('button', { name: 'Confirm rebase and merge' });
+    }
+
+    it('ignores the second click of a double-click on Confirm, and a deliberate click afterwards still works (once)', async () => {
+      mergeMock.mockResolvedValue(mergeResult());
+      const confirm = await openConfirmation();
+
+      fireEvent.click(confirm, { detail: 2 }); // the second half of a double-click
+      expect(mergeMock).not.toHaveBeenCalled();
+      expect(screen.getByTestId('merge-confirm')).toBeInTheDocument();
+
+      await act(async () => {
+        fireEvent.click(confirm, { detail: 1 });
+      });
+      await screen.findByTestId('review-table');
+      expect(mergeMock).toHaveBeenCalledTimes(1);
+    });
+
+    it('cancels the key repeat from holding Enter on "Rebase and merge": it would otherwise land on the focused Confirm button', async () => {
+      const confirm = await openConfirmation();
+      expect(confirm).toHaveFocus(); // this is what makes the held key reach it
+
+      expect(fireEvent.keyDown(confirm, { key: 'Enter', repeat: true })).toBe(false); // the default action (a click) is cancelled
+      expect(fireEvent.keyDown(confirm, { key: 'Enter', repeat: true })).toBe(false);
+      expect(fireEvent.keyDown(confirm, { key: 'Enter', repeat: false })).toBe(true); // a fresh press is left alone
+      expect(fireEvent.keyDown(confirm, { key: ' ', repeat: false })).toBe(true);
+      expect(mergeMock).not.toHaveBeenCalled();
+      expect(screen.getByTestId('merge-confirm')).toBeInTheDocument();
+    });
+
+    it('sends one merge however many click events arrive (a stuck or held key, a double tap, a bouncing mouse)', async () => {
+      mergeMock.mockReturnValue(new Promise(() => {}));
+      const confirm = await openConfirmation();
+
+      for (let i = 0; i < 10; i++) fireEvent.click(confirm);
+
+      expect(mergeMock).toHaveBeenCalledTimes(1);
+      await waitFor(() => expect(mergeButton()).toHaveTextContent('Rebasing and merging…'));
+      for (let i = 0; i < 5; i++) fireEvent.click(mergeButton());
+      expect(mergeMock).toHaveBeenCalledTimes(1);
+      expect(screen.queryByTestId('merge-confirm')).not.toBeInTheDocument();
+    });
+
+    it('after a refused merge the reviewer can try again, and that is exactly one more request', async () => {
+      mergeMock.mockRejectedValueOnce(new ReviewApiError('Rebasing "AT-727-add-test" onto playwright-main hit conflicts.')).mockReturnValue(new Promise(() => {}));
+      await openReview();
+      await approveAndMerge();
+      await screen.findByTestId('merge-error');
+      expect(mergeMock).toHaveBeenCalledTimes(1);
+
+      fireEvent.click(mergeButton());
+      const confirm = within(await screen.findByTestId('merge-confirm')).getByRole('button', { name: 'Confirm rebase and merge' });
+      fireEvent.click(confirm);
+      fireEvent.click(confirm);
+
+      expect(mergeMock).toHaveBeenCalledTimes(2);
+    });
+
+    it('shows the server\'s "already being merged" refusal (a second tab, or a reload mid-merge) and lets the reviewer wait and check', async () => {
+      mergeMock.mockRejectedValueOnce(new ReviewApiError('"AT-727-add-test" is already being merged. Wait for that to finish; there is no need to click again.'));
+      await openReview();
+      await approveAndMerge();
+
+      expect(await screen.findByTestId('merge-error')).toHaveTextContent('already being merged');
+      expect(mergeButton()).toBeEnabled();
+      expect(mergeMock).toHaveBeenCalledTimes(1);
+    });
+
+    it('the first "Rebase and merge" click only asks: a second activation of it can never merge by itself', async () => {
+      await openReview();
+      await approve();
+      const first = mergeButton();
+      fireEvent.click(first);
+      fireEvent.click(first, { detail: 2 }); // a stale reference to the button that was just replaced
+
+      await screen.findByTestId('merge-confirm');
+      expect(mergeMock).not.toHaveBeenCalled();
+    });
   });
 
   it('keeps the reviewer on the page with the reason (and files) when the merge is refused, and lets them retry', async () => {

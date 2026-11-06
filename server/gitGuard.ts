@@ -16,7 +16,7 @@ import { join } from 'node:path';
  * remote still points at the exact commit that was reviewed (a lease), and
  * never the base branch or any non-AT branch. Alongside those it may
  * run the read-only commands needed to *look at* branches (rev-parse, for-each-ref,
- * rev-list, cherry, log, diff, merge-tree, remote get-url) and `fetch`, which
+ * rev-list, merge-base --is-ancestor, cherry, log, diff, merge-tree, remote get-url) and `fetch`, which
  * only refreshes remote-tracking refs. Nothing else — no force push, no branch
  * deletion, no reset/commit/stash/config, no other branches or remotes — is
  * reachable: every argv must match one of the shapes below exactly, or it
@@ -102,7 +102,12 @@ export function createGitGuard(ctx: GitGuardContext) {
       case 'rev-list':
         if (rest.length === 3 && rest[0] === '--left-right' && rest[1] === '--count' && isRange(rest[2], '...')) return;
         if (rest.length === 2 && rest[0] === '--count' && isRange(rest[1], '..')) return;
+        if (rest.length === 3 && rest[0] === '--merges' && rest[1] === '--count' && isRange(rest[2], '..')) return; // "is this history a straight line?"
         return deny('rev-list is only allowed between the base branch and an AT branch (or HEAD).');
+
+      case 'merge-base':
+        // Read-only ancestry check (is the base tip underneath the rebased commits?). It creates nothing.
+        return ok(is('--is-ancestor', baseRef, 'HEAD'), `only "git merge-base --is-ancestor ${baseRef} HEAD" is allowed.`);
 
       case 'cherry':
         return ok(rest.length === 2 && rest.every(isRef), 'cherry is only allowed between the base branch and an AT branch.');

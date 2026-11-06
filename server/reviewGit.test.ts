@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync, readFileSync, readdirSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync, readFileSync, readdirSync, chmodSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -815,6 +815,315 @@ describe('the Review column gates detail and merge', () => {
       const subjects = git(fx.origin, 'log', '--format=%s', '-3', BASE).split('\n');
       expect(subjects).toEqual(expect.arrayContaining(['AT-1 Add new spec', 'AT-3 Another spec']));
       expect(git(fx.origin, 'log', '--merges', '--format=%h', BASE)).toBe('');
+    });
+  });
+});
+
+// The reviewer's whole workflow in one place: rebase the branch onto the latest
+// playwright-main, wait for that to finish, then move playwright-main up to it. That
+// is a fast-forward, exactly what `git merge AT-123` does after a manual rebase, and a
+// merge commit must NEVER appear, whatever happens before or during the merge.
+describe('rebase first, then merge: always a straight line, never a merge commit', () => {
+  const anyJira = () => fakeJira({ findReviewIssue: vi.fn(async (key: string) => issue(key, 'Another ticket', 'Brian')) });
+  const parentsOf = (ref: string) =>
+    git(fx.origin, 'rev-list', '--parents', ref)
+      .split('\n')
+      .map((l) => l.split(' ').slice(1));
+  const expectStraightLine = (ref = BASE) => {
+    expect(git(fx.origin, 'log', '--merges', '--format=%h', ref)).toBe('');
+    for (const parents of parentsOf(ref)) expect(parents.length).toBeLessThanOrEqual(1);
+  };
+  const cutBranch = (name: string, file: string, content: string, message: string, from = BASE) => {
+    git(fx.seed, 'checkout', '-q', '-b', name, from);
+    commitFile(fx.seed, file, content, message);
+    git(fx.seed, 'push', '-q', 'origin', name);
+  };
+
+  it('two tickets in a row: the second is rebased onto the first (and waits for that) before it merges', async () => {
+    cutBranch('AT-3-another', 'three.spec.ts', 'z\n', 'AT-3 Another spec');
+    const svc = createReviewService(config(), { ...installed, jira: anyJira() });
+    await svc.list();
+    const [a, b] = await Promise.all([svc.detail('AT-1-add-spec'), svc.detail('AT-3-another')]);
+    expect(b.behind).toBe(0); // as the reviewer saw it, before AT-1 landed
+
+    const first = await svc.merge({ branch: 'AT-1-add-spec', expectedSha: a.sha });
+
+    // Going to the next ticket: it is now one commit behind, with the same reviewed commit.
+    const bNow = await svc.detail('AT-3-another');
+    expect(bNow.sha).toBe(b.sha);
+    expect(bNow.behind).toBe(1);
+    expect(bNow.canRebase).toBe(true);
+
+    const second = await svc.merge({ branch: 'AT-3-another', expectedSha: b.sha });
+
+    // Rebased first (a new commit, not the one that was reviewed), then fast-forwarded: AT-3 sits directly on AT-1.
+    expect(second.newBaseSha).not.toBe(b.sha);
+    expect(git(fx.origin, 'rev-parse', BASE)).toBe(second.newBaseSha);
+    expect(git(fx.origin, 'rev-parse', `${BASE}~1`)).toBe(first.newBaseSha);
+    expect(git(fx.origin, 'log', '--format=%s', '-3', BASE).split('\n')).toEqual(['AT-3 Another spec', 'AT-1 Add new spec', 'AT-9 Base edits a.txt']);
+    expect(git(fx.origin, 'show', `${BASE}:three.spec.ts`)).toBe('z');
+    expect(git(fx.origin, 'show', `${BASE}:spec/new.spec.ts`)).toContain("test('x'"); // both tickets' files, nothing lost
+    expectStraightLine();
+    expect(git(fx.origin, 'branch', '--list').split('\n').map((l) => l.trim().replace('* ', '')).sort()).toEqual(['AT-2-conflicting', 'feature/unrelated', 'playwright-main']);
+  });
+
+  it('three in a row, starting from stale views, still ends as one straight line in the order merged', async () => {
+    cutBranch('AT-3-three', 'three.spec.ts', '3\n', 'AT-3 Third');
+    cutBranch('AT-4-four', 'four.spec.ts', '4\n', 'AT-4 Fourth');
+    const svc = createReviewService(config(), { ...installed, jira: anyJira() });
+    await svc.list();
+    const views = await Promise.all(['AT-1-add-spec', 'AT-3-three', 'AT-4-four'].map((b) => svc.detail(b)));
+    for (const v of views) await svc.merge({ branch: v.branch, expectedSha: v.sha });
+    expect(git(fx.origin, 'log', '--format=%s', '-4', BASE).split('\n')).toEqual(['AT-4 Fourth', 'AT-3 Third', 'AT-1 Add new spec', 'AT-9 Base edits a.txt']);
+    expectStraightLine();
+  });
+
+  it('the QA workflow: two tickets cut from the same playwright-main with several commits each. The first lands as-is, the second is rebased on top and keeps every commit, in order, with its author', async () => {
+    git(fx.seed, 'checkout', '-q', '-b', 'AT-3-multi', BASE);
+    commitFile(fx.seed, 'multi/three-a.spec.ts', 'a\n', 'AT-3 First');
+    commitFile(fx.seed, 'multi/three-b.spec.ts', 'b\n', 'AT-3 Second');
+    commitFile(fx.seed, 'multi/three-c.spec.ts', 'c\n', 'AT-3 Third');
+    git(fx.seed, 'push', '-q', 'origin', 'AT-3-multi');
+    git(fx.seed, 'checkout', '-q', '-b', 'AT-4-multi', BASE);
+    commitFile(fx.seed, 'multi/four-a.spec.ts', 'a\n', 'AT-4 First');
+    commitFile(fx.seed, 'multi/four-b.spec.ts', 'b\n', 'AT-4 Second');
+    git(fx.seed, 'push', '-q', 'origin', 'AT-4-multi');
+
+    const svc = createReviewService(config(), { ...installed, jira: anyJira() });
+    await svc.list();
+    const [three, four] = await Promise.all([svc.detail('AT-3-multi'), svc.detail('AT-4-multi')]);
+    expect([three.unmerged, four.unmerged]).toEqual([3, 2]);
+    expect([three.behind, four.behind]).toEqual([0, 0]);
+
+    // 1) the first ticket sits directly on playwright-main already, so it needs no rewriting: its own commits just move the branch up
+    const first = await svc.merge({ branch: 'AT-3-multi', expectedSha: three.sha });
+    expect(first.merged).toBe(3);
+    expect(first.newBaseSha).toBe(three.sha);
+
+    // 2) the second is now 3 commits behind: rebased onto the first, and only then moved up
+    expect((await svc.detail('AT-4-multi')).behind).toBe(3);
+    const second = await svc.merge({ branch: 'AT-4-multi', expectedSha: four.sha });
+    expect(second.merged).toBe(2);
+    expect(second.newBaseSha).not.toBe(four.sha);
+
+    expect(git(fx.origin, 'log', '--format=%s', '-6', BASE).split('\n')).toEqual([
+      'AT-4 Second',
+      'AT-4 First',
+      'AT-3 Third',
+      'AT-3 Second',
+      'AT-3 First',
+      'AT-9 Base edits a.txt',
+    ]);
+    // authorship survives the rebase (the reviewer only becomes the committer)
+    expect(git(fx.origin, 'log', '--format=%an', '-5', BASE).split('\n')).toEqual(Array(5).fill('Seed User'));
+    expect(git(fx.origin, 'log', '--format=%cn', '-2', BASE).split('\n')).toEqual(['QA User', 'QA User']);
+    for (const f of ['three-a', 'three-b', 'three-c', 'four-a', 'four-b']) expect(git(fx.origin, 'cat-file', '-e', `${BASE}:multi/${f}.spec.ts`)).toBe('');
+    expectStraightLine();
+  });
+
+  it('a second ticket that now conflicts with the first stops at the rebase: nothing is merged, nothing is deleted', async () => {
+    // AT-5 adds the same file AT-1 adds, with different content
+    cutBranch('AT-5-clash', 'spec/new.spec.ts', "test('different', () => {})\n", 'AT-5 Same file, different spec');
+    const svc = createReviewService(config(), { ...installed, jira: anyJira() });
+    await svc.list();
+    const [a, c] = await Promise.all([svc.detail('AT-1-add-spec'), svc.detail('AT-5-clash')]);
+    expect(c.canRebase).toBe(true); // fine on its own
+    await svc.merge({ branch: 'AT-1-add-spec', expectedSha: a.sha });
+    const baseAfterFirst = git(fx.origin, 'rev-parse', BASE);
+
+    expect((await svc.detail('AT-5-clash')).canRebase).toBe(false); // the page says so before anyone clicks
+    const err = await svc.merge({ branch: 'AT-5-clash', expectedSha: c.sha }).catch((e) => e);
+
+    expect(err).toMatchObject({ status: 409, details: ['spec/new.spec.ts'] });
+    expect(err.message).toMatch(/hit conflicts/);
+    expect(git(fx.origin, 'rev-parse', BASE)).toBe(baseAfterFirst);
+    expect(git(fx.origin, 'branch', '--list', 'AT-5-clash').trim()).toBe('AT-5-clash'); // still there to fix
+    expect(git(fx.app, 'worktree', 'list').split('\n')).toHaveLength(1);
+    expectStraightLine();
+  });
+
+  it('a branch that already contains a merge commit (someone merged playwright-main into it) lands flattened, with no merge commit', async () => {
+    git(fx.seed, 'checkout', '-q', '-b', 'AT-6-has-merge', BASE);
+    commitFile(fx.seed, 'six-a.spec.ts', 'a\n', 'AT-6 First commit');
+    git(fx.seed, 'checkout', '-q', BASE);
+    commitFile(fx.seed, 'base-moves-on.txt', 'y\n', 'AT-10 Base moves on');
+    git(fx.seed, 'push', '-q', 'origin', BASE);
+    git(fx.seed, 'checkout', '-q', 'AT-6-has-merge');
+    git(fx.seed, 'merge', '--no-ff', '-q', '-m', 'Merge playwright-main into AT-6', BASE);
+    commitFile(fx.seed, 'six-b.spec.ts', 'b\n', 'AT-6 Second commit');
+    git(fx.seed, 'push', '-q', 'origin', 'AT-6-has-merge');
+    expect(git(fx.seed, 'log', '--merges', '--format=%s', 'AT-6-has-merge')).toBe('Merge playwright-main into AT-6'); // the branch really has one
+
+    const svc = createReviewService(config(), { ...installed, jira: anyJira() });
+    await svc.list(); // fetches AT-6 into the clone, as the page's refresh does
+    const d = await svc.detail('AT-6-has-merge');
+    const result = await svc.merge({ branch: 'AT-6-has-merge', expectedSha: d.sha });
+
+    expect(result.merged).toBe(2);
+    expect(git(fx.origin, 'log', '--format=%s', '-3', BASE).split('\n')).toEqual(['AT-6 Second commit', 'AT-6 First commit', 'AT-10 Base moves on']);
+    expect(git(fx.origin, 'log', '--format=%s', BASE)).not.toContain('Merge playwright-main');
+    expectStraightLine();
+  });
+
+  describe('pressing the button twice (or from two tabs) can never merge, push or move anything twice', () => {
+    it('a second request for the same branch while the first is running is refused at once, and only one merge happens', async () => {
+      const jira = anyJira();
+      const svc = createReviewService(config(), { ...installed, jira });
+      const d = await svc.detail('AT-1-add-spec');
+      const baseBefore = git(fx.origin, 'rev-parse', BASE);
+
+      const first = svc.merge({ branch: 'AT-1-add-spec', expectedSha: d.sha, moveToDone: true });
+      const second = svc.merge({ branch: 'AT-1-add-spec', expectedSha: d.sha, moveToDone: true });
+      const third = svc.merge({ branch: 'AT-1-add-spec', expectedSha: d.sha, moveToDone: true });
+
+      await expect(second).rejects.toMatchObject({ status: 409, message: expect.stringContaining('already being merged') });
+      await expect(third).rejects.toMatchObject({ status: 409, message: expect.stringContaining('already being merged') });
+      const result = await first;
+
+      expect(result).toMatchObject({ merged: 1, branchDeleted: true, ticketMoved: 'AT-1' });
+      expect(git(fx.origin, 'rev-list', '--count', `${baseBefore}..${BASE}`)).toBe('1'); // exactly one commit landed
+      expect(jira.moveReviewIssueToDone).toHaveBeenCalledTimes(1);
+      expectStraightLine();
+    });
+
+    it('the same click after the merge has finished is refused too (branch is gone), and still nothing happens twice', async () => {
+      const jira = anyJira();
+      const svc = createReviewService(config(), { ...installed, jira });
+      const d = await svc.detail('AT-1-add-spec');
+      await svc.merge({ branch: 'AT-1-add-spec', expectedSha: d.sha, moveToDone: true });
+      const baseAfter = git(fx.origin, 'rev-parse', BASE);
+
+      await expect(svc.merge({ branch: 'AT-1-add-spec', expectedSha: d.sha, moveToDone: true })).rejects.toMatchObject({ status: 404 });
+
+      expect(git(fx.origin, 'rev-parse', BASE)).toBe(baseAfter);
+      expect(jira.moveReviewIssueToDone).toHaveBeenCalledTimes(1);
+    });
+
+    it('the guard is released after a failure, so the reviewer can try again', async () => {
+      const svc = createReviewService(config(), { ...installed, jira: anyJira() });
+      const d = await svc.detail('AT-2-conflicting');
+      await expect(svc.merge({ branch: 'AT-2-conflicting', expectedSha: d.sha })).rejects.toMatchObject({ status: 409, message: expect.stringContaining('hit conflicts') });
+      // not "already being merged": the failed attempt is over
+      await expect(svc.merge({ branch: 'AT-2-conflicting', expectedSha: d.sha })).rejects.toMatchObject({ message: expect.stringContaining('hit conflicts') });
+    });
+
+    it('different tickets are not blocked by each other: they queue and both land, in order', async () => {
+      cutBranch('AT-3-another', 'three.spec.ts', 'z\n', 'AT-3 Another spec');
+      const svc = createReviewService(config(), { ...installed, jira: anyJira() });
+      await svc.list();
+      const [a, b] = await Promise.all([svc.detail('AT-1-add-spec'), svc.detail('AT-3-another')]);
+
+      const results = await Promise.all([svc.merge({ branch: 'AT-1-add-spec', expectedSha: a.sha }), svc.merge({ branch: 'AT-3-another', expectedSha: b.sha })]);
+
+      expect(results.map((r) => r.merged)).toEqual([1, 1]);
+      expect(git(fx.origin, 'log', '--format=%s', '-3', BASE).split('\n')).toEqual(['AT-3 Another spec', 'AT-1 Add new spec', 'AT-9 Base edits a.txt']);
+      expectStraightLine();
+    });
+
+    it('a malformed request does not leave the guard stuck for anything else', async () => {
+      const svc = createReviewService(config(), { ...installed, jira: anyJira() });
+      await expect(svc.merge({ branch: 'AT-1-add-spec' })).rejects.toMatchObject({ status: 400 }); // no expectedSha
+      const d = await svc.detail('AT-1-add-spec');
+      await expect(svc.merge({ branch: 'AT-1-add-spec', expectedSha: d.sha })).resolves.toMatchObject({ merged: 1 });
+    });
+  });
+
+  describe('when something goes wrong between the rebase and the push', () => {
+    let shimDir: string;
+    const savedPath = process.env.PATH;
+
+    // A `git` in front of the real one that behaves normally, but right after the rebase succeeds it does
+    // something to the repository, to make a rare situation happen on purpose.
+    function useShim(mode: 'merge-commit' | 'teammate-lands-first') {
+      shimDir = mkdtempSync(join(tmpdir(), 'git-shim-'));
+      const real = execFileSync('which', ['git'], { encoding: 'utf8' }).trim();
+      const shim = join(shimDir, 'git');
+      writeFileSync(
+        shim,
+        `#!/bin/sh
+"$REAL_GIT" "$@"
+rc=$?
+case " $* " in
+  *" rebase origin/playwright-main "*)
+    if [ "$rc" = 0 ]; then
+      case "$SHIM_MODE" in
+        merge-commit)
+          T=$("$REAL_GIT" rev-parse 'HEAD^{tree}')
+          S=$("$REAL_GIT" commit-tree "$T" -m side)
+          M=$("$REAL_GIT" commit-tree "$T" -p HEAD -p "$S" -m "a merge commit that must never be pushed")
+          "$REAL_GIT" checkout -q --detach "$M"
+          ;;
+        teammate-lands-first)
+          "$REAL_GIT" -C "$TEAMMATE" fetch -q origin
+          "$REAL_GIT" -C "$TEAMMATE" checkout -q -B teammate origin/playwright-main
+          echo "from a teammate" > "$TEAMMATE/teammate.txt"
+          "$REAL_GIT" -C "$TEAMMATE" add -A
+          "$REAL_GIT" -C "$TEAMMATE" commit -q -m "Teammate lands first"
+          "$REAL_GIT" -C "$TEAMMATE" push -q origin HEAD:playwright-main
+          ;;
+      esac
+    fi
+    ;;
+esac
+exit $rc
+`,
+      );
+      chmodSync(shim, 0o755);
+      process.env.PATH = `${shimDir}:${savedPath}`;
+      process.env.REAL_GIT = real;
+      process.env.SHIM_MODE = mode;
+      process.env.TEAMMATE = fx.seed;
+    }
+    afterEach(() => {
+      process.env.PATH = savedPath;
+      delete process.env.REAL_GIT;
+      delete process.env.SHIM_MODE;
+      delete process.env.TEAMMATE;
+      if (shimDir) rmSync(shimDir, { recursive: true, force: true });
+    });
+
+    it('refuses to push a result that contains a merge commit, and nothing changes anywhere', async () => {
+      const jira = anyJira();
+      const svc = createReviewService(config(), { ...installed, jira });
+      const d = await svc.detail('AT-1-add-spec');
+      const baseBefore = git(fx.origin, 'rev-parse', BASE);
+      useShim('merge-commit');
+
+      const err = await svc.merge({ branch: 'AT-1-add-spec', expectedSha: d.sha, moveToDone: true }).catch((e) => e);
+
+      expect(err).toMatchObject({ status: 409 });
+      expect(err.message).toMatch(/not a straight line of commits \(it contains 1 merge commit\)/);
+      expect(err.message).toMatch(/Merge commits are never created here, and nothing was pushed/);
+      expect(git(fx.origin, 'rev-parse', BASE)).toBe(baseBefore);
+      expect(git(fx.origin, 'branch', '--list', 'AT-1-add-spec').trim()).toBe('AT-1-add-spec'); // branch kept
+      expect(jira.moveReviewIssueToDone).not.toHaveBeenCalled();
+      expect(git(fx.app, 'worktree', 'list').split('\n')).toHaveLength(1);
+      expectStraightLine();
+    });
+
+    it('when a teammate lands on playwright-main after our rebase, our push is rejected as non-fast-forward and nothing is lost or merged', async () => {
+      const jira = anyJira();
+      const svc = createReviewService(config(), { ...installed, jira });
+      const d = await svc.detail('AT-1-add-spec');
+      useShim('teammate-lands-first');
+
+      const err = await svc.merge({ branch: 'AT-1-add-spec', expectedSha: d.sha, moveToDone: true }).catch((e) => e);
+
+      expect(err).toMatchObject({ status: 409 });
+      expect(err.message).toMatch(/moved while merging\. Nothing was pushed/);
+      // the teammate's commit is the base tip, ours was not forced over it, and no merge commit papered over the gap
+      expect(git(fx.origin, 'log', '-1', '--format=%s', BASE)).toBe('Teammate lands first');
+      expect(git(fx.origin, 'log', '--format=%s', BASE)).not.toContain('AT-1 Add new spec');
+      expect(git(fx.origin, 'branch', '--list', 'AT-1-add-spec').trim()).toBe('AT-1-add-spec');
+      expect(jira.moveReviewIssueToDone).not.toHaveBeenCalled();
+      expectStraightLine();
+
+      // Clicking again (now without the shim) rebases onto the teammate's commit and lands cleanly on top of it.
+      process.env.PATH = savedPath;
+      const again = await svc.merge({ branch: 'AT-1-add-spec', expectedSha: d.sha });
+      expect(again.merged).toBe(1);
+      expect(git(fx.origin, 'log', '--format=%s', '-3', BASE).split('\n')).toEqual(['AT-1 Add new spec', 'Teammate lands first', 'AT-9 Base edits a.txt']);
+      expectStraightLine();
     });
   });
 });

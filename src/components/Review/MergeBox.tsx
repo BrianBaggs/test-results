@@ -253,7 +253,17 @@ export const MergeBox = React.forwardRef<HTMLDivElement, MergeBoxProps>(({ detai
               <Button
                 size="lg"
                 autoFocus
-                onClick={() => void doMerge()}
+                // The merge needs two deliberate actions. Two accidents are ruled out here:
+                // - holding Enter on "Rebase and merge": its key repeat would otherwise land on this button, which
+                //   appears focused, and confirm for you. Only a fresh key press counts.
+                // - the second click of a double-click.
+                onKeyDown={(e) => {
+                  if (e.repeat) e.preventDefault();
+                }}
+                onClick={(e) => {
+                  if (e.detail > 1) return;
+                  void doMerge();
+                }}
                 className="w-full bg-success text-success-foreground hover:bg-success/90 sm:w-auto"
               >
                 <GitMergeIcon className="size-5" />

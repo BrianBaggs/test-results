@@ -24,6 +24,8 @@ describe('git guard rail: what IS allowed', () => {
     allowed(['for-each-ref', '--format=%(refname:strip=3)', 'refs/remotes/origin/']);
     allowed(['rev-list', '--left-right', '--count', `${BASE}...${AT}`]);
     allowed(['rev-list', '--count', `${BASE}..HEAD`], TMP);
+    allowed(['rev-list', '--merges', '--count', `${BASE}..HEAD`], TMP); // is the rebased history a straight line?
+    allowed(['merge-base', '--is-ancestor', BASE, 'HEAD'], TMP);
     allowed(['cherry', BASE, AT]);
     allowed(['log', '--reverse', '--max-count=200', '--format=%H', `${BASE}..${AT}`]);
     allowed(['diff', '-M', '--no-color', '--no-ext-diff', '--no-textconv', `${BASE}...${AT}`]);
@@ -121,6 +123,62 @@ describe('git guard rail: branch deletion is AT-### only', () => {
   it('can never delete the configured base branch, whatever it is called', () => {
     const odd = createGitGuard({ remote: 'origin', baseBranch: 'AT-1-base', projectKey: 'AT' });
     expect(() => odd(['push', 'origin', `--force-with-lease=refs/heads/AT-1-base:${SHA}`, '--delete', 'AT-1-base'], TMP)).toThrow(GitGuardError);
+  });
+});
+
+describe('git guard rail: never a merge commit', () => {
+  it.each([
+    ['merge', ['merge', AT]],
+    ['merge a ref', ['merge', BASE]],
+    ['merge --no-ff', ['merge', '--no-ff', AT]],
+    ['merge --ff-only', ['merge', '--ff-only', AT]],
+    ['merge --squash', ['merge', '--squash', AT]],
+    ['merge --abort', ['merge', '--abort']],
+    ['pull (fetch + merge)', ['pull']],
+    ['pull --no-rebase', ['pull', '--no-rebase', 'origin', 'playwright-main']],
+    ['commit-tree (hand-built commits)', ['commit-tree', 'HEAD^{tree}', '-p', 'HEAD', '-p', BASE]],
+    ['commit', ['commit', '-m', 'x']],
+    ['cherry-pick', ['cherry-pick', SHA]],
+    ['reset', ['reset', '--hard', BASE]],
+    ['update-ref', ['update-ref', 'refs/heads/playwright-main', SHA]],
+  ])('%s is blocked everywhere, even inside the temp worktree', (_name, args) => {
+    blocked(args as string[]);
+    blocked(args as string[], TMP);
+  });
+
+  it('the one merge-tree shape allowed is the read-only conflict dry run in the main repo, never a way to build a commit', () => {
+    allowed(['merge-tree', '--write-tree', '--name-only', '--no-messages', BASE, AT]);
+    blocked(['merge-tree', '--write-tree', '--name-only', BASE, AT]); // not the exact read-only shape
+    blocked(['commit-tree', 'HEAD^{tree}']);
+  });
+
+  it.each([
+    ['--rebase-merges', ['rebase', '--rebase-merges', BASE]],
+    ['-r', ['rebase', '-r', BASE]],
+    ['--preserve-merges', ['rebase', '--preserve-merges', BASE]],
+    ['--interactive', ['rebase', '-i', BASE]],
+    ['--onto', ['rebase', '--onto', BASE, BASE]],
+    ['--continue', ['rebase', '--continue']],
+    ['--strategy', ['rebase', '-s', 'ours', BASE]],
+    ['onto master', ['rebase', 'origin/master']],
+  ])('rebase %s is blocked: the only rebase is a plain "git rebase %s"-shaped one onto the base (or --abort)', (_name, args) => {
+    blocked(args as string[], TMP);
+  });
+
+  it('the only rebase allowed is a plain one onto the base, in the temp worktree', () => {
+    allowed(['rebase', BASE], TMP);
+    allowed(['rebase', '--abort'], TMP);
+    blocked(['rebase', BASE]); // not in the real checkout
+  });
+
+  it('the straight-line checks are read-only and exact: nothing can ride along', () => {
+    blocked(['merge-base', BASE, 'HEAD']); // no --is-ancestor
+    blocked(['merge-base', '--is-ancestor', 'origin/master', 'HEAD']);
+    blocked(['merge-base', '--is-ancestor', BASE, 'HEAD', '--extra']);
+    blocked(['merge-base', '--octopus', BASE, AT]);
+    blocked(['rev-list', '--merges', '--count', `${BASE}...${AT}`]); // wrong separator
+    blocked(['rev-list', '--merges', `${BASE}..HEAD`]); // would list commits, not count
+    blocked(['rev-list', '--merges', '--count', 'origin/master..HEAD']);
   });
 });
 

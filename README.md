@@ -102,6 +102,34 @@ only browser state is per-session UI progress: which files you viewed
    (no manual rebasing), fast-forwards it into `playwright-main`, deletes the
    `AT-###` branch, and moves the ticket to Done. It then disappears from the list.
 
+This is what you would do by hand (rebase the branch onto `playwright-main`, then
+`git merge AT-123`, `git push`), in the same order:
+
+- **Rebase first, and wait for it.** Every merge fetches the latest
+  `playwright-main` and rebases the branch onto it before anything is pushed. If
+  you merged AT-123 a minute ago, AT-124 is simply one commit behind: it is
+  rebased onto the new `playwright-main`, and only when that has finished is
+  `playwright-main` moved up to it. A branch that is already on top of
+  `playwright-main` needs no rewrite. All of a branch's commits are kept, in
+  order, with their original authors.
+- **Never a merge commit.** After the rebase the branch sits directly on top of
+  `playwright-main`, so moving `playwright-main` to it is a fast-forward, exactly
+  what `git merge AT-123` does after a manual rebase. `git merge` itself can
+  never run. As a last check before the push the server verifies that
+  `playwright-main`'s tip is underneath the rebased commits and that none of them
+  is a merge commit; if either fails it refuses, with nothing pushed. A branch
+  that contains a merge commit (someone merged `playwright-main` into it) is
+  flattened by the rebase, never copied over.
+- **If someone else lands first.** The push is a plain fast-forward, so if a
+  teammate pushed to `playwright-main` after the rebase it is rejected, nothing is
+  pushed, and you click again to rebase onto their commit.
+- **Conflicts** stop at the rebase: nothing is merged or deleted, and the files
+  are listed so you can fix the branch.
+
+The rebase is non-interactive (every commit is replayed as-is); squashing or
+rewording with `git rebase -i` is not available here, so do that on the branch
+before it goes to Review.
+
 The rebase happens in a throw-away git worktree, so your own checkout (branch
 and uncommitted work) is never touched. Merges are always **into
 `playwright-main`**, which is not configurable.
@@ -180,7 +208,8 @@ point each command line is built (`server/gitGuard.ts`, `server/acli.ts`,
   reviewable or mergeable.
 - **git**: only check out (into a temp worktree), rebase, and merge
   (a plain fast-forward push to `playwright-main`) — plus read-only commands to
-  look at branches and `fetch`. Only branches named exactly `AT-###` /
+  look at branches and `fetch`. `git merge`, `pull`, `cherry-pick`, `commit`,
+  `rebase -i`, `rebase --rebase-merges` and every other form are blocked. Only branches named exactly `AT-###` /
   `AT-###-…` (case-sensitive) can be acted on, and **only** such a branch can be
   deleted, and only after it was merged and only if origin still has the exact
   commit that was reviewed. No force pushes, no resets, nothing else.
@@ -227,6 +256,12 @@ locked down beyond the command guard rails above:
   runs the reviewed commit. Only spec/fixture data files are copied into the test
   server (never Ruby or other code), with a private journal and byte-exact
   restore. Review the diff before you press play.
+- **No double merges.** "Rebase and merge" needs two deliberate actions. The
+  Confirm button ignores the second click of a double-click and the key repeat
+  from holding Enter on the first button, and the page locks while a merge runs.
+  The server refuses a second request for a ticket that is already being merged
+  (a second tab, or a reload mid-merge) at once, and merges for different tickets
+  queue and run one at a time.
 - **Bounded work.** Commands use `execFile` (no shell), have timeouts and
   buffer limits, one merge or spec run happens at a time, runs are killed as a
   whole process group on cancel, spec output is capped, and a review response is

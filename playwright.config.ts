@@ -79,6 +79,8 @@ export default defineConfig({
     reuseExistingServer: !process.env.CI,
     env: {
       USE_BABEL_PLUGIN_ISTANBUL: '1',
+      // see vite.config.ts: keeps the coverage report accurate for .tsx files
+      E2E_COVERAGE: '1',
     },
   },
 });

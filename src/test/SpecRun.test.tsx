@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, within, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, within, waitFor, act } from '@testing-library/react';
 import { toast } from 'sonner';
 import { SpecResults } from '../components/Review/SpecResults';
 import { OutputLog, SpecRunModal } from '../components/Review/SpecRunModal';
@@ -552,7 +552,9 @@ describe('SpecRunModal', () => {
     try {
       modal(runState({ running: true, job: { ...activeJob('running'), startedAt: new Date(Date.now() - 1000).toISOString(), elapsedMs: 1000 } }));
       expect(dialog()).toHaveTextContent('1.0s');
-      await vi.advanceTimersByTimeAsync(3000);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(3000); // the modal's own interval updates its state as time passes
+      });
       expect(dialog()).toHaveTextContent('4.0s');
     } finally {
       vi.useRealTimers();

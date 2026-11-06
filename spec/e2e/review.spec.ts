@@ -182,6 +182,9 @@ async function mockApi(
     detail?: unknown
     merge?: unknown
     mergeDelayMs?: number
+    /** Holds the list / detail response back, to see the loading placeholders. */
+    listDelayMs?: number
+    detailDelayMs?: number
     decision?: unknown
     testServer?: unknown
     testRun?: unknown
@@ -206,11 +209,13 @@ async function mockApi(
 
   await page.route('**/api/review/list', async route => {
     calls.list++
+    if (opts.listDelayMs) await new Promise(resolve => setTimeout(resolve, opts.listDelayMs))
     await route.fulfill(ok(opts.list ?? reviewList()))
   })
 
   await page.route('**/api/review/detail**', async route => {
     calls.detail++
+    if (opts.detailDelayMs) await new Promise(resolve => setTimeout(resolve, opts.detailDelayMs))
     await route.fulfill(ok(opts.detail ?? reviewDetail()))
   })
 
@@ -1062,6 +1067,95 @@ test.describe('Review - rebase and merge', () => {
     expect(calls.merge).toHaveLength(1)
   })
 
+  test('should not confirm by itself when Rebase and merge is double-clicked', async ({ page }) => {
+    const calls = await mockApi(page)
+
+    await openFirstReview(page)
+
+    await approve(page)
+
+    await mergeButton(page).dblclick()
+
+    await expect(confirmBox(page)).toBeVisible()
+
+    await page.waitForTimeout(400)
+
+    expect(calls.merge).toHaveLength(0)
+
+    await expect(confirmBox(page)).toBeVisible()
+  })
+
+  test('should not confirm when Enter is held down on Rebase and merge (the key repeat must not reach Confirm)', async ({ page }) => {
+    const calls = await mockApi(page)
+
+    await openFirstReview(page)
+
+    await approve(page)
+
+    await mergeButton(page).focus()
+
+    // the first key-down activates the button; Confirm appears and takes the focus
+    await page.keyboard.down('Enter')
+
+    await expect(confirmBox(page)).toBeVisible()
+
+    await expect(confirmMerge(page)).toBeFocused()
+
+    // the browser keeps repeating the key while it stays down
+    for (let i = 0; i < 6; i++) await page.keyboard.down('Enter')
+
+    await page.keyboard.up('Enter')
+
+    await page.waitForTimeout(300)
+
+    await expect(confirmBox(page)).toBeVisible()
+
+    expect(calls.merge).toHaveLength(0)
+
+    // a fresh, deliberate press does confirm
+    await page.keyboard.press('Enter')
+
+    await expect.poll(() => calls.merge.length).toBe(1)
+  })
+
+  test('should send exactly one request when Confirm is pressed repeatedly with the keyboard', async ({ page }) => {
+    const calls = await mockApi(page, { mergeDelayMs: 1500 })
+
+    await openFirstReview(page)
+
+    await approve(page)
+
+    await mergeButton(page).click()
+
+    await expect(confirmMerge(page)).toBeFocused()
+
+    await page.keyboard.press('Enter')
+
+    await page.keyboard.press('Enter')
+
+    await page.keyboard.press('Space')
+
+    await page.keyboard.press('Enter')
+
+    await expect(mergeButton(page)).toHaveText(/Rebasing and merging/)
+
+    await expect(page.getByTestId('review-table')).toBeVisible({ timeout: 10_000 })
+
+    expect(calls.merge).toHaveLength(1)
+  })
+
+  test('should show the server refusal when the same ticket is already being merged (another tab, or a reload mid-merge)', async ({ page }) => {
+    await mockApi(page, { merge: fail(409, '"AT-727-add-test" is already being merged. Wait for that to finish; there is no need to click again.') })
+
+    await openFirstReview(page)
+
+    await approveAndConfirm(page)
+
+    await expect(page.getByTestId('merge-error')).toContainText('already being merged')
+
+    await expect(mergeButton(page)).toBeEnabled()
+  })
+
   test('should explain a conflict found during the merge and let the reviewer retry', async ({ page }) => {
     const calls = await mockApi(page, {
       merge: fail(409, 'Rebasing "AT-727-add-test" onto playwright-main hit conflicts. Rebase it locally, resolve them, push, then try again.', ['spec/a.spec.ts'])
@@ -1800,6 +1894,136 @@ test.describe('Review - PRs that only change Playwright support files', () => {
     expect(overflow).toBe(false)
 
     await expect(page.getByTestId('support-group-cassettes')).toBeVisible()
+  })
+})
+
+test.describe('Review - loading placeholders and badges', () => {
+
+  test('should show a loading placeholder while the list loads, then swap it for the table', async ({ page }) => {
+    await mockApi(page, { listDelayMs: 1500 })
+
+    await openReviewTab(page)
+
+    const loading = page.getByRole('status').filter({ hasText: 'Fetching from origin and Jira' })
+
+    await expect(loading).toBeVisible()
+
+    // three cards of two placeholder lines each, hidden from screen readers (the status message speaks for them)
+    await expect(loading.locator('.animate-pulse')).toHaveCount(6)
+
+    await expect(loading.locator('.animate-pulse[aria-hidden="true"]')).toHaveCount(6)
+
+    await expect(page.getByTestId('review-table')).toBeHidden()
+
+    await expect(page.getByTestId('review-table')).toBeVisible({ timeout: 10_000 })
+
+    await expect(loading).toBeHidden()
+  })
+
+  test('should show a loading placeholder naming the ticket while it opens, then swap it for the page', async ({ page }) => {
+    await mockApi(page, { detailDelayMs: 1500 })
+
+    await openReviewTab(page)
+
+    await page.getByRole('button', { name: 'Review AT-727' }).click()
+
+    const loading = page.getByTestId('detail-loading')
+
+    await expect(loading).toBeVisible()
+
+    await expect(loading).toHaveAttribute('role', 'status')
+
+    await expect(loading).toContainText('Loading pull request…')
+
+    await expect(loading).toContainText('Reading AT-727 from Jira')
+
+    await expect(loading.locator('.animate-pulse')).toHaveCount(3)
+
+    await expect(page.getByTestId('merge-box')).toBeHidden()
+
+    await expect(page.getByTestId('merge-box')).toBeVisible({ timeout: 10_000 })
+
+    await expect(loading).toBeHidden()
+  })
+
+  test('should let you go back while a ticket is still loading', async ({ page }) => {
+    await mockApi(page, { detailDelayMs: 1500 })
+
+    await openReviewTab(page)
+
+    await page.getByRole('button', { name: 'Review AT-727' }).click()
+
+    await expect(page.getByTestId('detail-loading')).toBeVisible()
+
+    await page.getByRole('button', { name: /Back to Review/ }).click()
+
+    await expect(page.getByTestId('review-table')).toBeVisible()
+
+    await expect(page.getByTestId('detail-loading')).toBeHidden()
+  })
+
+  test('should style each status badge by what it means', async ({ page }) => {
+    await mockApi(page)
+
+    await openReviewTab(page)
+
+    // the ticket's Jira status in the table: the quiet "secondary" badge
+    const row = page.getByTestId('review-ticket').first()
+
+    await expect(row.locator('div.inline-flex', { hasText: /^Review$/ })).toHaveClass(/bg-secondary/)
+
+    await row.getByRole('button', { name: 'Review AT-727' }).click()
+
+    await expect(page.getByTestId('merge-box')).toBeVisible()
+
+    // clean and ready: outlined in the success colour
+    const ready = page.getByText('Ready to merge', { exact: true })
+
+    await expect(ready).toHaveClass(/border-success/)
+
+    await expect(ready).toHaveClass(/text-success/)
+  })
+
+  test('should style a conflicting PR in the destructive colour, visibly different from the neutral badges', async ({ page }) => {
+    await mockApi(page, { detail: reviewDetail({ canRebase: false, conflicts: ['spec/a.spec.ts'] }) })
+
+    await openFirstReview(page)
+
+    const conflicts = page.getByText('Conflicts', { exact: true })
+
+    await expect(conflicts).toHaveClass(/bg-destructive/)
+
+    // and it is visibly different from the neutral badges (a real colour difference, not just a class name)
+    const colours = await page.evaluate(() => {
+      const bg = (el: Element | null) => (el ? getComputedStyle(el).backgroundColor : '')
+
+      const all = [...document.querySelectorAll('div.inline-flex')]
+
+      return {
+        destructive: bg(all.find(e => e.textContent === 'Conflicts') ?? null),
+        neutral: bg(all.find(e => e.className.includes('bg-secondary')) ?? null)
+      }
+    })
+
+    expect(colours.destructive).not.toBe('')
+
+    expect(colours.destructive).not.toBe(colours.neutral)
+  })
+
+  test('should show a neutral "Already merged" badge when playwright-main already has the changes', async ({ page }) => {
+    await mockApi(page, { detail: reviewDetail({ unmerged: 0 }) })
+
+    await openFirstReview(page)
+
+    await expect(page.getByText('Already merged', { exact: true })).toHaveClass(/bg-secondary/)
+  })
+
+  test('should flag a branch that is behind with a warning badge in the table', async ({ page }) => {
+    await mockApi(page, { list: reviewList({ tickets: [ticket({ branches: [branch({ behind: 3 })] })] }) })
+
+    await openReviewTab(page)
+
+    await expect(page.getByText('3 behind — auto-rebased')).toHaveClass(/text-warning/)
   })
 })
 

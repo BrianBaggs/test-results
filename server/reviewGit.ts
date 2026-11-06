@@ -698,7 +698,23 @@ export function createReviewService(config: ReviewConfig, deps: ReviewServiceDep
     };
   }
 
+  // Branches that have a merge queued or running. A second request for the same branch (a double
+  // click, a second tab, a page reload while it runs) is refused straight away instead of queueing up
+  // behind the first one and failing confusingly once that one has deleted the branch.
+  const mergesInProgress = new Set<string>();
+
   function merge(opts: { branch: unknown; expectedSha?: unknown; moveToDone?: unknown }): Promise<MergeResult> {
+    const requested = typeof opts.branch === 'string' ? opts.branch : null;
+    if (requested !== null && mergesInProgress.has(requested)) {
+      return Promise.reject(new ReviewError(409, `"${requested}" is already being merged. Wait for that to finish; there is no need to click again.`));
+    }
+    if (requested !== null) mergesInProgress.add(requested);
+    return mergeLocked(opts).finally(() => {
+      if (requested !== null) mergesInProgress.delete(requested);
+    });
+  }
+
+  function mergeLocked(opts: { branch: unknown; expectedSha?: unknown; moveToDone?: unknown }): Promise<MergeResult> {
     return withLock(async () => {
       const { branch } = opts;
       assertReviewable(branch);
@@ -754,6 +770,23 @@ export function createReviewService(config: ReviewConfig, deps: ReviewServiceDep
         const merged = Number((await mustGit(['rev-list', '--count', `${baseRef}..HEAD`], dir, 'git rev-list')).trim());
         if (!merged) {
           throw new ReviewError(409, `Nothing to merge: rebasing "${branch}" onto ${baseBranch} left no new commits.`);
+        }
+
+        // NEVER a merge commit. What we push must be a straight line of ordinary
+        // commits sitting directly on the base tip, so moving the base branch to it
+        // is a fast-forward (exactly what `git merge` does after a manual rebase).
+        // A plain `git rebase` flattens merges and always gives that; this is the
+        // last line of defence in case git's configuration or a tool ever changes
+        // that, and nothing has been pushed yet if it trips.
+        const onTop = await git(['merge-base', '--is-ancestor', baseRef, 'HEAD'], dir);
+        const mergeCommits = Number((await mustGit(['rev-list', '--merges', '--count', `${baseRef}..HEAD`], dir, 'git rev-list')).trim());
+        if (onTop.code !== 0 || mergeCommits > 0) {
+          throw new ReviewError(
+            409,
+            `Refusing to merge "${branch}": after rebasing it onto ${baseBranch} the result is not a straight line of commits ` +
+              `${mergeCommits > 0 ? `(it contains ${mergeCommits} merge commit${mergeCommits === 1 ? '' : 's'})` : '(it does not sit on top of the latest commit)'}. ` +
+              `Merge commits are never created here, and nothing was pushed. Rebase the branch locally onto ${baseBranch}, push it, then try again.`,
+          );
         }
 
         // Plain (non-force) push: only succeeds as a fast-forward, so if

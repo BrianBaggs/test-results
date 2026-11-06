@@ -22,6 +22,13 @@ export default defineConfig(({ mode }) => {
     build: {
       sourcemap: true
     },
+    // Only for the Playwright server (playwright.config.ts sets E2E_COVERAGE). Coverage is added after the
+    // JSX transform and mapped back to the .tsx through its source map. The dev-mode JSX transform adds
+    // generated-only arguments (fileName, lineNumber, columnNumber) to every JSX call, and that makes the
+    // mapping drop most statements: Feedback.tsx and badge.tsx were reported as 0% although the specs render
+    // them. Plain JSX keeps the mapping intact. Normal `npm run dev` keeps dev-mode JSX, whose component
+    // stacks make React warnings (invalid nesting, keys) point at the right component.
+    oxc: process.env.E2E_COVERAGE ? { jsx: { development: false } } : undefined,
     plugins: [
       react(),
       publishPlugin({ webhookUrl: env.SLACK_WEBHOOK_URL }),
