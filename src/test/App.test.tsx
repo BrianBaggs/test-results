@@ -33,6 +33,9 @@ vi.mock('../components/Layout/Navbar', () => ({
       <button data-testid="shard-tab" onClick={() => setActiveTab('shard')}>
         Shard {activeTab === 'shard' && '(active)'}
       </button>
+      <button data-testid="review-tab" onClick={() => setActiveTab('review')}>
+        Review {activeTab === 'review' && '(active)'}
+      </button>
       <button data-testid="bogus-tab" onClick={() => setActiveTab('bogus')}>
         Bogus
       </button>
@@ -128,6 +131,10 @@ vi.mock('../components/Shard/ShardPage', () => ({
       </button>
     </div>
   ),
+}));
+
+vi.mock('../components/Review/ReviewPage', () => ({
+  ReviewPage: () => <div data-testid="review-page">Review Page</div>,
 }));
 
 describe('App', () => {
@@ -312,6 +319,17 @@ describe('App', () => {
     fireEvent.click(screen.getByTestId('combine-and-go-to-report'));
 
     expect(syncProgressStorageForNewXml).not.toHaveBeenCalled();
+  });
+
+  it('should switch to the review tab when clicked', () => {
+    render(<App />);
+
+    expect(screen.queryByTestId('review-page')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('review-tab'));
+
+    expect(screen.getByTestId('review-page')).toBeInTheDocument();
+    expect(screen.getByTestId('review-tab')).toHaveTextContent('(active)');
+    expect(screen.queryByTestId('dashboard')).not.toBeInTheDocument();
   });
 
   it('should switch to shard tab when clicked', () => {

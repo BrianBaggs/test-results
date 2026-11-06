@@ -7,6 +7,7 @@ import {
   SplitIcon,
   BoxesIcon,
   FlaskConicalIcon,
+  GitPullRequestIcon,
   type LucideIcon,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
@@ -31,6 +32,7 @@ const NAV_ITEMS: NavItem[] = [
   { id: 'split', label: 'Split', icon: SplitIcon },
   { id: 'shard', label: 'Shard', icon: BoxesIcon },
   { id: 'publish', label: 'Publish', icon: SendIcon },
+  { id: 'review', label: 'Review', icon: GitPullRequestIcon },
 ];
 
 export const Navbar: React.FC<NavbarProps> = ({ activeTab, setActiveTab }) => {
@@ -54,6 +56,8 @@ export const Navbar: React.FC<NavbarProps> = ({ activeTab, setActiveTab }) => {
                 <button
                   key={id}
                   onClick={() => setActiveTab(id)}
+                  aria-label={label}
+                  aria-current={isActive ? 'page' : undefined}
                   className={cn(
                     'flex items-center gap-2 whitespace-nowrap rounded-full px-3.5 py-1.5 text-sm font-medium transition-all',
                     isActive

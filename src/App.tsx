@@ -8,6 +8,7 @@ import { FailureAnalysisProgress } from './components/FailureAnalysis/FailureAna
 import { PublishPage } from './components/Publish/PublishPage';
 import { SplitPage } from './components/Split/SplitPage';
 import { ShardPage } from './components/Shard/ShardPage';
+import { ReviewPage } from './components/Review/ReviewPage';
 import { Toaster } from './components/ui/sonner';
 import { syncProgressStorageForNewXml } from './utils/progressStorage';
 import type { TestData } from './types';
@@ -46,6 +47,8 @@ export function App() {
         return <ReportGenerator testData={testData} setActiveTab={setActiveTab} />;
       case 'publish':
         return <PublishPage testData={testData} />;
+      case 'review':
+        return <ReviewPage />;
       case 'split':
         return <SplitPage xmlContent={xmlContent} onCombined={handleCombinedDataUpload} setActiveTab={setActiveTab} />;
       case 'shard':

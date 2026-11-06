@@ -4,6 +4,7 @@ import { defineConfig, loadEnv } from 'vite'
 import react from '@vitejs/plugin-react'
 import IstanbulPlugin from 'vite-plugin-istanbul'
 import { publishPlugin } from './server/publishPlugin.ts'
+import { reviewPlugin } from './server/reviewPlugin.ts'
 
 // https://vitejs.dev/config/
 export default defineConfig(({ mode }) => {
@@ -24,6 +25,15 @@ export default defineConfig(({ mode }) => {
     plugins: [
       react(),
       publishPlugin({ webhookUrl: env.SLACK_WEBHOOK_URL }),
+      // Review tab: runs local git (and the Atlassian CLI) from the dev server.
+      reviewPlugin({
+        repoPath: env.REVIEW_REPO_PATH,
+        jira: {
+          reviewStatus: env.JIRA_REVIEW_STATUS,
+          doneStatus: env.JIRA_DONE_STATUS,
+          baseUrl: env.JIRA_BASE_URL || 'https://securicyapp.atlassian.net'
+        }
+      }),
       IstanbulPlugin({
         include: 'src/*',
         exclude: ['node_modules', 'test/', 'src/test/**', '.history/**'],

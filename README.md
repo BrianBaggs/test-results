@@ -10,6 +10,7 @@ A React-based web application for analyzing JUnit XML test results with comprehe
 - **Split & Combine**: Split a run's failures evenly between teammates, then combine each teammate's exported progress back into one report
 - **Shard**: Combine the separate JUnit XML reports produced by a sharded Playwright run (e.g. `--shard=1/3`) back into one JUnit XML file
 - **Publish**: Send a summary of the loaded results directly to a Slack channel via an Incoming Webhook
+- **Review**: A local, GitHub-style review of the AT tickets in the Jira Review column — read the diff, approve, then rebase and merge into `playwright-main` (see [Review tab](#review-tab))
 - **Report Generation**: Generate and preview PDF reports from test data
 - **Light/Dark Mode**: Toggle between light and dark themes, persisted across sessions
 - **Comprehensive Testing**: Vitest for unit/component tests, Playwright for e2e
@@ -75,6 +76,99 @@ images must be fetched from a public URL, and this app has no backend of its
 own to host a generated image, so the pass/fail/skipped counts are sent to
 QuickChart's public endpoint to get one back. No test names, file paths, or
 failure details are included in that request — only the three counts.
+
+## Review tab
+
+QA can't open GitHub pull requests for AT tickets (that would run the whole
+automated suite), so the **Review** tab gives the team a PR-style flow using
+the command-line tools already installed and signed in on your machine. There
+is no database — the only state is per-session UI progress (which files you
+viewed, whether you approved) kept in the browser's `sessionStorage`.
+
+**The flow**
+
+1. Open **Review**. Every ticket in the AT board's **Review** column is listed
+   in a table with its branch, author, commits and a `git diff --stat` summary.
+2. Click one to open its page: conversation, commits, and a split/unified diff
+   with syntax highlighting, a file index, and a "Viewed" checkbox per file.
+3. **Approve** the changes, then **Rebase and merge**. The branch is rebased on
+   the latest `playwright-main` (no manual rebasing), fast-forwarded into
+   `playwright-main`, the `AT-###` branch is deleted, and the ticket is moved to
+   Done. It then disappears from the list.
+
+The rebase happens in a throw-away git worktree, so your own checkout (branch
+and uncommitted work) is never touched. Merges are always **into
+`playwright-main`**, which is not configurable.
+
+**Requirements** — the page checks these and shows a status light for each
+(green = ready), with the exact install command for anything missing:
+
+| Tool | Why | Install / sign in |
+| --- | --- | --- |
+| Git | fetch, rebase, merge | `brew install git` |
+| Atlassian CLI (`acli`) | read the Review column, move tickets to Done | `brew tap atlassian/homebrew-acli && brew install acli`, then `acli auth login` |
+| A `securicy-app` clone | the repository being reviewed | `git clone git@github.com:carbidesecure/securicy-app.git ~/Dev/securicy-app` |
+| GitHub CLI (`gh`) — optional | informational light only; shows whether `gh` is signed in | `brew install gh`, then `gh auth login` |
+
+Optional `.env` settings (see `.env.example`): `REVIEW_REPO_PATH` (default
+`~/Dev/securicy-app`), `JIRA_REVIEW_STATUS` (default `Review`) and
+`JIRA_DONE_STATUS` (`Done` or `Completed`). Restart `npm run dev` after
+changing `.env`. The Review tab only works under `npm run dev` (it runs the
+commands in the dev server), not in a static build.
+
+**Guard rails** — these are deliberately strict and enforced in code at the
+point each command line is built (`server/gitGuard.ts`, `server/acli.ts`,
+`server/ghStatus.ts`), with tests that try to break them:
+
+- **Jira (`acli`)**: only the **AT** project, and only two things: read the
+  tickets in the Review column, and move a ticket that is *in* Review to
+  Done/Completed after its branch has been merged. Only tickets that are in the
+  Review column are ever shown, reviewable or mergeable.
+- **git**: only check out (into a temp worktree), rebase, and merge
+  (a plain fast-forward push to `playwright-main`) — plus read-only commands to
+  look at branches and `fetch`. Only branches named exactly `AT-###` /
+  `AT-###-…` (case-sensitive) can be acted on, and **only** such a branch can be
+  deleted, and only after it was merged and only if origin still has the exact
+  commit that was reviewed. No force pushes, no resets, nothing else.
+- **gh**: the only command that can ever run is `gh auth status` (read-only).
+- The HTTP endpoints accept only same-origin JSON requests to localhost.
+
+### Review tab security notes
+
+The Review endpoints run `git` and can push to a shared branch, so they are
+locked down beyond the command guard rails above:
+
+- **Local only.** Requests must be addressed to `localhost`/`127.0.0.1`/`::1`
+  (defeats DNS rebinding), must carry `Sec-Fetch-Site: same-origin` (or none),
+  and `POST`s must be same-origin JSON. If the dev server is started with
+  `--host` (reachable from the network) the Review API refuses to exist.
+- **No clickjacking / sniffing.** Every dev-server response sends
+  `frame-ancestors 'self'`, `X-Frame-Options`, `nosniff` and `no-referrer`; API
+  responses are `same-origin` only and never cached.
+- **Explicit approval.** A merge request is rejected unless it carries
+  `approved: true` (sent only after you press Approve), names the exact commit
+  you reviewed (`expectedSha`), and the ticket is still in the Review column.
+  Request bodies are capped at 64 KB.
+- **Untrusted content.** Diffs, commit messages and ticket titles come from
+  other people. React escapes all text, the diff viewer escapes each line
+  (regression-tested with hostile payloads in unit and real-browser tests), and
+  only `http(s)` links are ever rendered as links. The app never runs code from
+  a branch (no install, build or test commands) and git is run with
+  `--no-ext-diff --no-textconv`.
+- **Bounded work.** Commands use `execFile` (no shell), have timeouts and
+  buffer limits, one merge runs at a time, and a review response is capped at
+  5 MB of diff.
+- **Dependencies.** The one new library, `@git-diff-view/react`, is pinned to an
+  exact version, has no install scripts, and `npm audit` reports 0 production
+  vulnerabilities.
+
+Residual risks you should know about: the API is unauthenticated, so any
+process on your machine that can reach the dev server can use it while it is
+running (that is inherent to local dev servers; it is why it is loopback-only);
+git hooks in your `securicy-app` checkout, if you add any, will run during the
+rebase and push; and the app complements rather than replaces branch
+protection — consider enabling GitHub branch protection on `playwright-main`
+(require linear history) so the server enforces the same rule.
 
 ## Available Scripts
 

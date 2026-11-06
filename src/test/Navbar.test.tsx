@@ -11,6 +11,7 @@ vi.mock('lucide-react', () => ({
   SendIcon: () => <div data-testid="send-icon" />,
   SplitIcon: () => <div data-testid="split-icon" />,
   BoxesIcon: () => <div data-testid="boxes-icon" />,
+  GitPullRequestIcon: () => <div data-testid="git-pull-request-icon" />,
   FlaskConicalIcon: () => <div data-testid="flask-conical-icon" />,
   SunIcon: () => <div data-testid="sun-icon" />,
   MoonIcon: () => <div data-testid="moon-icon" />,
@@ -39,6 +40,7 @@ describe('Navbar', () => {
     expect(screen.getByText('Split')).toBeInTheDocument();
     expect(screen.getByText('Shard')).toBeInTheDocument();
     expect(screen.getByText('Publish')).toBeInTheDocument();
+    expect(screen.getByText('Review')).toBeInTheDocument();
   });
 
   it('should render all icons', () => {
@@ -51,6 +53,7 @@ describe('Navbar', () => {
     expect(screen.getByTestId('split-icon')).toBeInTheDocument();
     expect(screen.getByTestId('boxes-icon')).toBeInTheDocument();
     expect(screen.getByTestId('send-icon')).toBeInTheDocument();
+    expect(screen.getByTestId('git-pull-request-icon')).toBeInTheDocument();
   });
 
   it('should render the theme toggle', () => {
