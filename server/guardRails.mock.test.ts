@@ -3,7 +3,8 @@ import { vi } from 'vitest';
 import { existsSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { assertAllowedAcliCommand, createJiraClient } from './acli';
+import { assertAllowedAcliCommand, assertReviewEditPayload, createJiraClient, fromAdf } from './acli';
+import { readFileSync as readFile } from 'node:fs';
 import { assertAllowedGhCommand } from './ghStatus';
 import { TEMP_WORKTREE_PREFIX, createGitGuard } from './gitGuard';
 import { createReviewService } from './reviewGit';
@@ -30,6 +31,9 @@ const h = vi.hoisted(() => ({
   spawned: [] as Array<{ bin: string; args: string[]; cwd?: string }>,
   override: null as null | ((bin: string, args: string[]) => { code?: number | string; stdout?: string; stderr?: string } | undefined),
   respond: null as unknown as (bin: string, args: string[]) => { code?: number | string; stdout?: string; stderr?: string },
+  approval: 'approved' as 'approved' | 'declined' | null,
+  info: '',
+  edits: [] as Array<Record<string, unknown>>,
 }));
 
 vi.mock('node:child_process', () => ({
@@ -80,6 +84,30 @@ const jiraReview = (extra: unknown[] = []) =>
   ]);
 
 h.respond = function respond(bin, args): FakeResult {
+  if (bin === 'acli' && args[2] === 'view') {
+    return {
+      stdout: JSON.stringify({
+        key: args[3],
+        fields: {
+          summary: `Ticket ${args[3]}`,
+          status: { name: 'Review' },
+          assignee: { displayName: 'Brian Baggs' },
+          customfield_10550: { displayName: 'Matthew Carabin' },
+          customfield_10650: h.approval === 'approved' ? [{ value: 'Approved', id: '10478' }] : h.approval === 'declined' ? [{ value: 'Declined', id: '10479' }] : [],
+          customfield_10652: h.info ? { type: 'doc', version: 1, content: h.info.split('\n').map((t) => ({ type: 'paragraph', content: t ? [{ type: 'text', text: t }] : [] })) } : null,
+        },
+      }),
+    };
+  }
+  if (bin === 'acli' && args[2] === 'edit') {
+    // what the edit file held while acli "ran" (the app deletes it right after)
+    const payload = JSON.parse(readFile(args[4], 'utf8')) as Record<string, unknown>;
+    h.edits.push(payload);
+    const a = payload.customfield_10650 as Array<{ id: string }> | undefined;
+    if (a) h.approval = a.length === 0 ? null : a[0].id === '10478' ? 'approved' : 'declined';
+    if (payload.customfield_10652) h.info = fromAdf(payload.customfield_10652);
+    return {};
+  }
   if (bin === 'acli') return { stdout: jiraReview() };
   if (bin === 'gh') return { stdout: 'github.com\n  ✓ Logged in to github.com account BrianBaggs (keyring)\n' };
   if (bin !== 'git') return { code: 127, stderr: `unexpected binary: ${bin}` };
@@ -151,9 +179,16 @@ function auditEverything() {
   for (const c of gitCalls()) {
     expect(() => independentGitGuard(c.args, c.cwd ?? repoPath), `git ${c.args.join(' ')}`).not.toThrow();
   }
-  for (const c of acliCalls()) {
+  for (const c of acliCalls().filter((x) => x.args[2] !== 'edit')) {
     expect(() => assertAllowedAcliCommand(c.args, { reviewStatus: 'Review', doneStatus: 'Done' }), `acli ${c.args.join(' ')}`).not.toThrow();
   }
+  // edit commands read a private temp file that is gone by now: audit what it held, and the argv shape
+  for (const c of acliCalls().filter((x) => x.args[2] === 'edit')) {
+    expect(c.args.slice(0, 4)).toEqual(['jira', 'workitem', 'edit', '--from-json']);
+    expect(c.args).toHaveLength(6);
+    expect(c.args[5]).toBe('--yes');
+  }
+  for (const payload of h.edits) expect(() => assertReviewEditPayload(payload)).not.toThrow();
   for (const c of ghCalls()) {
     expect(() => assertAllowedGhCommand(c.args), `gh ${c.args.join(' ')}`).not.toThrow();
   }
@@ -181,6 +216,9 @@ function auditEverything() {
 beforeEach(() => {
   h.spawned.length = 0;
   h.override = null;
+  h.approval = 'approved';
+  h.info = '';
+  h.edits.length = 0;
 });
 
 afterAll(() => {
@@ -261,6 +299,72 @@ describe('guard rails, audited through mocked processes', () => {
     it('asks gh for nothing except "auth status"', async () => {
       await makeService().ghStatus();
       expect(ghCalls().map((c) => c.args)).toEqual([['auth', 'status']]);
+    });
+  });
+
+  describe('review decisions (approve / decline) and the merge gate', () => {
+    const edits = () => acliCalls().filter((c) => c.args[2] === 'edit');
+
+    it('approving ticks Approved on exactly that AT ticket, nothing else, and only touches Jira', async () => {
+      h.approval = null;
+      const svc = makeService();
+      const d = await svc.detail('AT-727-add-test');
+      const issue = await svc.submitReview({ branch: 'AT-727-add-test', expectedSha: d.sha, decision: 'approved' });
+
+      expect(issue.approval).toBe('approved');
+      expect(h.edits).toEqual([{ issues: ['AT-727'], customfield_10650: [{ id: '10478' }] }]);
+      expect(edits()).toHaveLength(1);
+      expect(gitCalls().filter((c) => ['push', 'rebase', 'worktree'].includes(c.args[0]))).toEqual([]);
+      auditEverything();
+    });
+
+    it('declining ticks Declined and records the review information', async () => {
+      h.approval = null;
+      const svc = makeService();
+      const d = await svc.detail('AT-727-add-test');
+      const issue = await svc.submitReview({ branch: 'AT-727-add-test', expectedSha: d.sha, decision: 'declined', info: 'Missing a cleanup step' });
+
+      expect(issue).toMatchObject({ approval: 'declined', reviewInfo: 'Missing a cleanup step' });
+      expect(h.edits[0]).toMatchObject({ issues: ['AT-727'], customfield_10650: [{ id: '10479' }] });
+      auditEverything();
+    });
+
+    it('a merge needs the ticket approved in Jira: unapproved and declined tickets never reach git', async () => {
+      for (const state of [null, 'declined'] as const) {
+        h.approval = state;
+        h.spawned.length = 0;
+        const svc = makeService();
+        const d = await svc.detail('AT-727-add-test');
+        await expect(svc.merge({ branch: 'AT-727-add-test', expectedSha: d.sha, moveToDone: true })).rejects.toMatchObject({ status: 409 });
+        expect(gitCalls().filter((c) => ['worktree', 'rebase', 'push'].includes(c.args[0]))).toEqual([]);
+        expect(acliCalls().filter((c) => c.args[2] === 'transition' || c.args[2] === 'edit')).toEqual([]);
+      }
+    });
+
+    it.each(['master', 'APP-12310-encrypt', 'at-9-lowercase', 'AT-12abc-lookalike', '--evil'])('cannot record a decision for %s: nothing is spawned', async (branch) => {
+      await expect(makeService().submitReview({ branch, expectedSha: 'abcdef1', decision: 'approved' })).rejects.toMatchObject({ status: 400 });
+      expect(spawned()).toEqual([]);
+    });
+
+    it('refuses a decision for a ticket that is no longer in Review', async () => {
+      h.override = (bin, args) => (bin === 'acli' && args[2] === 'view' ? { stdout: JSON.stringify({ key: args[3], fields: { summary: 'x', status: { name: 'Done' } } }) } : undefined);
+      await expect(makeService().submitReview({ branch: 'AT-727-add-test', expectedSha: BRANCH_SHA, decision: 'approved' })).rejects.toMatchObject({ status: 404 });
+      expect(edits()).toEqual([]);
+    });
+
+    it('a decision for stale commits is refused before any edit', async () => {
+      await expect(makeService().submitReview({ branch: 'AT-727-add-test', expectedSha: '1234567', decision: 'approved' })).rejects.toMatchObject({ status: 409 });
+      expect(edits()).toEqual([]);
+    });
+
+    it('when acli cannot set the fields the user is told, and nothing else was touched', async () => {
+      h.approval = null;
+      h.override = (bin, args) => (bin === 'acli' && args[2] === 'edit' ? { code: 1, stderr: 'json: unknown field "customfield_10650"' } : undefined);
+      await expect(makeService().submitReview({ branch: 'AT-727-add-test', expectedSha: BRANCH_SHA, decision: 'approved' })).rejects.toMatchObject({
+        status: 502,
+        message: expect.stringContaining('in Jira instead'),
+      });
+      expect(acliCalls().filter((c) => c.args[2] === 'transition')).toEqual([]);
     });
   });
 
@@ -351,7 +455,8 @@ describe('guard rails, audited through mocked processes', () => {
     });
 
     it('refuses to show or merge a branch whose ticket is not in Review: no checkout, rebase, push or delete', async () => {
-      h.override = (bin, args) => (bin === 'acli' && args[2] === 'search' ? { stdout: '[]' } : undefined);
+      h.override = (bin, args) =>
+        bin === 'acli' && args[2] === 'view' ? { stdout: JSON.stringify({ key: args[3], fields: { summary: 'x', status: { name: 'In Progress' } } }) } : undefined;
       const svc = makeService();
       await expect(svc.detail('AT-727-add-test')).rejects.toMatchObject({ status: 404 });
       await expect(svc.merge({ branch: 'AT-727-add-test', expectedSha: BRANCH_SHA, moveToDone: true })).rejects.toMatchObject({ status: 404 });
@@ -459,8 +564,8 @@ describe('guard rails, audited through mocked processes', () => {
     });
 
     it('leaves a ticket that leaves Review mid-merge alone (merge still succeeds, with a warning)', async () => {
-      let keyChecks = 0;
-      h.override = (bin, args) => (bin === 'acli' && args[2] === 'search' && args[4].startsWith('key = ') && ++keyChecks > 2 ? { stdout: '[]' } : undefined);
+      // detail + the merge pre-check read the ticket (view); only the final move re-checks with a strict search
+      h.override = (bin, args) => (bin === 'acli' && args[2] === 'search' && args[4].startsWith('key = ') ? { stdout: '[]' } : undefined);
       const svc = makeService();
       const detail = await svc.detail('AT-727-add-test');
 

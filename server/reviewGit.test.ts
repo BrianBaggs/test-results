@@ -98,7 +98,7 @@ const IN_REVIEW: Record<string, { summary: string; assignee: string | null }> = 
   'AT-3': { summary: 'Another spec', assignee: null },
 };
 
-const issue = (key: string, summary: string, assignee: string | null) => ({ key, summary, status: 'Review', assignee, url: `https://jira/browse/${key}` });
+const issue = (key: string, summary: string, assignee: string | null, approval: 'approved' | 'declined' | null = 'approved') => ({ key, summary, status: 'Review', assignee, reviewers: assignee ? ['Matthew'] : [], approval, reviewInfo: approval === 'declined' ? 'Needs changes' : '', url: `https://jira/browse/${key}` });
 
 /** A fake acli-backed Jira client: AT-1, AT-2 and AT-3 are "in the Review column". */
 function fakeJira(overrides: Partial<Record<keyof JiraClient, unknown>> = {}): JiraClient {
@@ -106,6 +106,7 @@ function fakeJira(overrides: Partial<Record<keyof JiraClient, unknown>> = {}): J
     listReviewIssues: vi.fn().mockResolvedValue([issue('AT-1', 'Add new spec', 'Brian'), issue('AT-77', 'No branch yet', null)]),
     findReviewIssue: vi.fn(async (key: string) => (IN_REVIEW[key] ? issue(key, IN_REVIEW[key].summary, IN_REVIEW[key].assignee) : null)),
     moveReviewIssueToDone: vi.fn().mockResolvedValue(undefined),
+    submitReview: vi.fn(async (key: string, decision: string, info?: string) => ({ ...issue(key, 'x', 'Brian', decision === 'none' ? null : (decision as 'approved' | 'declined')), reviewInfo: info ?? '' })),
     ...overrides,
   } as unknown as JiraClient;
 }
@@ -124,6 +125,33 @@ afterEach(() => {
 const installed = { findExecutable: () => true };
 
 const config = () => ({ repoPath: fx.app, baseBranch: BASE, remote: 'origin', projectKey: 'AT' });
+
+describe('credentials never leave the server', () => {
+  const embedded = (token: string) => ['https:', '//qa-user:', token, '@127.0.0.1:1/org/repo.git'].join('');
+  const TOKEN = ['gh', 'p_', 'abcdefghijklmnopqrstuvwx'].join('');
+
+  it('strips a token embedded in the remote URL from the status the browser receives', async () => {
+    git(fx.app, 'remote', 'set-url', 'origin', embedded(TOKEN));
+    const s = await createReviewService(config(), { ...installed, jira: fakeJira() }).status();
+    expect(s.remoteUrl).toBe('https://127.0.0.1:1/org/repo.git');
+    expect(JSON.stringify(s)).not.toContain(TOKEN);
+    expect(s.repoWebUrl).toBe('https://127.0.0.1:1/org/repo');
+    expect(s.repoWebUrl).not.toContain('qa-user');
+  });
+
+  it('never puts a token from git\'s own error text into an API error', async () => {
+    git(fx.app, 'remote', 'set-url', 'origin', embedded(TOKEN));
+    const err = await createReviewService(config(), { ...installed, jira: fakeJira() }).list().catch((e) => e);
+    expect(err).toBeInstanceOf(ReviewError);
+    expect(err.message).not.toContain(TOKEN);
+    expect(err.message).not.toContain('qa-user:');
+  });
+
+  it('toWebUrl and the clone hint are safe for URLs that carry credentials', () => {
+    expect(toWebUrl(embedded(TOKEN))).toBe('https://127.0.0.1:1/org/repo');
+    expect(toWebUrl(embedded(TOKEN)) ?? '').not.toContain(TOKEN);
+  });
+});
 
 describe('security hardening', () => {
   it('shell-quotes paths in copyable commands so they cannot be split or expanded', () => {
@@ -435,10 +463,101 @@ describe('createReviewService', () => {
     });
   });
 
-  describe('the Review column gates detail and merge', () => {
+  describe('review decisions and the approval gate', () => {
+  const svc = (jira = fakeJira()) => createReviewService(config(), { ...installed, jira });
+
+  it('includes approval and review information on the show page data', async () => {
+    const jira = fakeJira({ findReviewIssue: vi.fn().mockResolvedValue(issue('AT-1', 'Add new spec', 'Brian', 'declined')) });
+    const d = await svc(jira).detail('AT-1-add-spec');
+    expect(d.ticket).toMatchObject({ approval: 'declined', reviewInfo: 'Needs changes' });
+  });
+
+  it.each([
+    [null, /hasn't been approved yet/],
+    ['declined', /was declined in review/],
+  ] as const)('refuses to merge a ticket whose approval is %s, before touching git', async (approval, message) => {
+    const jira = fakeJira({ findReviewIssue: vi.fn().mockResolvedValue(issue('AT-1', 'x', 'Brian', approval)) });
+    const baseBefore = git(fx.origin, 'rev-parse', BASE);
+    await expect(svc(jira).merge({ branch: 'AT-1-add-spec', expectedSha: 'abcdef1' })).rejects.toMatchObject({ status: 409, message: expect.stringMatching(message) });
+    expect(git(fx.origin, 'rev-parse', BASE)).toBe(baseBefore);
+    expect(git(fx.origin, 'branch', '--list', 'AT-1-add-spec')).toContain('AT-1-add-spec');
+  });
+
+  it('records an approval for the reviewed commit', async () => {
+    const jira = fakeJira();
+    const s = svc(jira);
+    await s.list();
+    const sha = (await s.detail('AT-1-add-spec')).sha;
+    const result = await s.submitReview({ branch: 'AT-1-add-spec', expectedSha: sha, decision: 'approved', info: '  Looks good  ' });
+    expect(jira.submitReview).toHaveBeenCalledExactlyOnceWith('AT-1', 'approved', 'Looks good');
+    expect(result.approval).toBe('approved');
+  });
+
+  it('declining needs a reason', async () => {
+    const jira = fakeJira();
+    const s = svc(jira);
+    await s.list();
+    const sha = (await s.detail('AT-1-add-spec')).sha;
+    for (const info of [undefined, '', '   ']) {
+      await expect(s.submitReview({ branch: 'AT-1-add-spec', expectedSha: sha, decision: 'declined', info })).rejects.toMatchObject({ status: 400, message: expect.stringContaining('Say why') });
+    }
+    expect(jira.submitReview).not.toHaveBeenCalled();
+    await expect(s.submitReview({ branch: 'AT-1-add-spec', expectedSha: sha, decision: 'declined', info: 'Missing cleanup' })).resolves.toBeTruthy();
+  });
+
+  it('validates the request before touching Jira', async () => {
+    const jira = fakeJira();
+    const s = svc(jira);
+    await s.list();
+    const sha = (await s.detail('AT-1-add-spec')).sha;
+    const call = (over: Record<string, unknown>) => s.submitReview({ branch: 'AT-1-add-spec', expectedSha: sha, decision: 'approved', ...over });
+    await expect(call({ decision: 'maybe' })).rejects.toMatchObject({ status: 400 });
+    await expect(call({ decision: undefined })).rejects.toMatchObject({ status: 400 });
+    await expect(call({ expectedSha: undefined })).rejects.toMatchObject({ status: 400 });
+    await expect(call({ expectedSha: 'not-a-sha' })).rejects.toMatchObject({ status: 400 });
+    await expect(call({ info: 42 })).rejects.toMatchObject({ status: 400 });
+    await expect(call({ info: 'x'.repeat(5001) })).rejects.toMatchObject({ status: 400, message: expect.stringContaining('5000') });
+    await expect(call({ branch: 'feature/x' })).rejects.toMatchObject({ status: 400 });
+    await expect(call({ branch: 'AT-404-missing' })).rejects.toMatchObject({ status: 404 });
+    await expect(call({ expectedSha: '1234567' })).rejects.toMatchObject({ status: 409, message: expect.stringContaining('changed since you opened it') });
+    expect(jira.submitReview).not.toHaveBeenCalled();
+  });
+
+  it('refuses a ticket that left the Review column', async () => {
+    // in Review when the page was opened, gone by the time the decision is submitted
+    const jira = fakeJira({ findReviewIssue: vi.fn().mockResolvedValueOnce(issue('AT-1', 'x', 'Brian')).mockResolvedValue(null) });
+    const s = svc(jira);
+    await s.list();
+    const sha = (await s.detail('AT-1-add-spec')).sha;
+    await expect(s.submitReview({ branch: 'AT-1-add-spec', expectedSha: sha, decision: 'approved' })).rejects.toMatchObject({ status: 404 });
+    expect(jira.submitReview).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [new AcliError('not signed in', 'not-authenticated'), 503],
+    [new AcliError("Your acli can't set these Jira fields", 'failed'), 502],
+  ])('maps a Jira write failure to a clear status', async (err, status) => {
+    const jira = fakeJira({ submitReview: vi.fn().mockRejectedValue(err) });
+    const s = svc(jira);
+    await s.list();
+    const sha = (await s.detail('AT-1-add-spec')).sha;
+    await expect(s.submitReview({ branch: 'AT-1-add-spec', expectedSha: sha, decision: 'approved' })).rejects.toMatchObject({ status, message: err.message });
+  });
+
+  it('lets a guard-rail refusal pass through and rethrows unexpected errors', async () => {
+    const s1 = svc(fakeJira({ submitReview: vi.fn().mockRejectedValue(new AcliError('Blocked by the AT-only guard rail: x', 'blocked')) }));
+    await s1.list();
+    const sha = (await s1.detail('AT-1-add-spec')).sha;
+    await expect(s1.submitReview({ branch: 'AT-1-add-spec', expectedSha: sha, decision: 'approved' })).rejects.toBeInstanceOf(AcliError);
+    const s2 = svc(fakeJira({ submitReview: vi.fn().mockRejectedValue(new TypeError('weird')) }));
+    await expect(s2.submitReview({ branch: 'AT-1-add-spec', expectedSha: sha, decision: 'approved' })).rejects.toBeInstanceOf(TypeError);
+  });
+});
+
+describe('the Review column gates detail and merge', () => {
     it('includes the Jira ticket on the show page data', async () => {
       const d = await createReviewService(config(), { ...installed, jira: fakeJira() }).detail('AT-1-add-spec');
-      expect(d.ticket).toMatchObject({ key: 'AT-1', summary: 'Add new spec', status: 'Review', assignee: 'Brian' });
+      expect(d.ticket).toMatchObject({ key: 'AT-1', summary: 'Add new spec', status: 'Review', assignee: 'Brian', reviewers: ['Matthew'] });
     });
 
     it('refuses to show a branch whose ticket is not in Review', async () => {

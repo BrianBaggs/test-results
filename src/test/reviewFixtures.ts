@@ -1,4 +1,4 @@
-import type { GhStatus, MergeResult, ReviewBranch, ReviewDetail, ReviewFile, ReviewList, ReviewStatus, ReviewTicket } from '../types/review';
+import type { GhStatus, MergeResult, ReviewBranch, ReviewDetail, ReviewFile, ReviewList, ReviewStatus, ReviewTicket, SpecFileResult, SpecJob, TestServerStatus } from '../types/review';
 
 export const SHA = 'a'.repeat(40);
 
@@ -21,6 +21,9 @@ export const ticket = (over: Partial<ReviewTicket> = {}): ReviewTicket => ({
   summary: 'Add tests for comments carrying over',
   status: 'Review',
   assignee: 'Brian Baggs',
+  reviewers: [],
+  approval: null,
+  reviewInfo: '',
   url: 'https://securicyapp.atlassian.net/browse/AT-727',
   branches: [branch()],
   ...over,
@@ -75,7 +78,7 @@ export const file = (over: Partial<ReviewFile> = {}): ReviewFile => ({
 
 export const detail = (over: Partial<ReviewDetail> = {}): ReviewDetail => ({
   branch: 'AT-727-add-test',
-  ticket: { key: 'AT-727', summary: 'Add tests for comments carrying over', status: 'Review', assignee: 'Brian Baggs', url: 'https://securicyapp.atlassian.net/browse/AT-727' },
+  ticket: { key: 'AT-727', summary: 'Add tests for comments carrying over', status: 'Review', assignee: 'Brian Baggs', reviewers: ['Matthew Carabin'], approval: null, reviewInfo: '', url: 'https://securicyapp.atlassian.net/browse/AT-727' },
   sha: SHA,
   baseBranch: 'playwright-main',
   baseSha: 'b'.repeat(40),
@@ -86,6 +89,9 @@ export const detail = (over: Partial<ReviewDetail> = {}): ReviewDetail => ({
   conflicts: [],
   commits: [{ sha: 'c'.repeat(40), author: 'Brian Baggs', date: new Date().toISOString(), subject: 'AT-727 Add tests', body: 'Longer description' }],
   files: [file()],
+  specs: [],
+  serverCodeChanged: [],
+  supportFiles: [],
   totals: { additions: 2, deletions: 0 },
   branchUrl: 'https://github.com/carbidesecure/securicy-app/tree/AT-727-add-test',
   ...over,
@@ -98,5 +104,64 @@ export const mergeResult = (over: Partial<MergeResult> = {}): MergeResult => ({
   branchDeleted: true,
   ticketMoved: null,
   warning: null,
+  ...over,
+});
+
+export const SPEC_A = 'spec/playwright/playwright/e2e/tasks/show/admin/recurring_comments_completed.spec.ts';
+export const SPEC_B = 'spec/playwright/playwright/e2e/tasks/show/owner/recurring_comments_completed.spec.ts';
+
+export const testServer = (over: Partial<TestServerStatus> = {}): TestServerStatus => ({
+  up: true,
+  host: '127.0.0.1',
+  port: 5017,
+  startCommand: 'yarn test:server',
+  activeJob: null,
+  ...over,
+});
+
+export const specResult = (file: string, over: Partial<SpecFileResult> = {}): SpecFileResult => ({
+  file,
+  status: 'passed',
+  durationMs: 4200,
+  tests: [{ title: 'Recurring task comments › Comment stays shared', line: 41, status: 'passed', durationMs: 4200, error: null }],
+  ...over,
+});
+
+export const failedSpecResult = (file: string): SpecFileResult =>
+  specResult(file, {
+    status: 'failed',
+    tests: [
+      { title: 'Recurring task comments › Comment stays shared', line: 41, status: 'passed', durationMs: 1000, error: null },
+      {
+        title: 'Recurring task comments › Evidence is copied',
+        line: 55,
+        status: 'failed',
+        durationMs: 3200,
+        error: {
+          message: 'Error: expect(locator).toContainText(expected)\n\nExpected substring: "Evidence for this"',
+          stack: 'Error: expect(locator).toContainText(expected)\n    at recurring_comments_completed.spec.ts:57:9',
+          snippet: '> 57 |   await expect(page.locator(\'.comments\')).toContainText(\'Evidence for this\')',
+        },
+      },
+    ],
+  });
+
+export const specJob = (over: Partial<SpecJob> = {}): SpecJob => ({
+  id: 'job-1',
+  branch: 'AT-727-add-test',
+  sha: SHA,
+  status: 'passed',
+  specs: [SPEC_A],
+  startedAt: new Date(Date.now() - 12_000).toISOString(),
+  finishedAt: new Date().toISOString(),
+  elapsedMs: 12_400,
+  output: 'Running 1 test using 1 worker\n  ✓  1 [chromium] › recurring_comments_completed.spec.ts:41:7 › works (4.2s)\n  1 passed (5.0s)\n',
+  nextOffset: 120,
+  truncated: false,
+  results: [specResult(SPEC_A)],
+  error: null,
+  warnings: [],
+  serverCodeChanged: [],
+  exitCode: 0,
   ...over,
 });

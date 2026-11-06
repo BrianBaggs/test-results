@@ -3,20 +3,37 @@ import type { IncomingMessage, ServerResponse } from 'http';
 import { ALLOWED_PROJECT, createJiraClient } from './acli.ts';
 import type { JiraSettings } from './acli.ts';
 import { AcliError } from './acli.ts';
+import { redactSecrets } from './redact.ts';
 import { GitGuardError } from './gitGuard.ts';
 import { GhGuardError } from './ghStatus.ts';
 import { ReviewError, createReviewService, expandHome } from './reviewGit.ts';
+import { OverlayError, recoverStaleOverlays } from './serverOverlay.ts';
+import { SpecGuardError } from './specRunner.ts';
 import type { ReviewService } from './reviewGit.ts';
 
 export interface ReviewPluginOptions {
   /** Local clone of the repo under review (REVIEW_REPO_PATH). */
   repoPath?: string;
   remote?: string;
+  /** The Rails test server's checkout, if it isn't the same as repoPath. */
+  serverRepoPath?: string;
+  testServerPort?: number;
   jira?: Partial<JiraSettings>;
 }
 
 /** Reviewed branches are ALWAYS merged into the QA branch that holds every Playwright spec. */
-export const QA_BASE_BRANCH = 'playwright-main';
+const QA_BASE_BRANCH = 'playwright-main';
+
+/** Last line of defence: no error text leaves the server with a credential in it. */
+function redactErrorBody(body: unknown): unknown {
+  if (!body || typeof body !== 'object' || (body as { success?: unknown }).success !== false) return body;
+  const b = body as { error?: unknown; details?: unknown };
+  return {
+    ...b,
+    ...(typeof b.error === 'string' ? { error: redactSecrets(b.error) } : {}),
+    ...(Array.isArray(b.details) ? { details: b.details.map((d) => (typeof d === 'string' ? redactSecrets(d) : d)) } : {}),
+  };
+}
 
 function sendJson(res: ServerResponse, status: number, body: unknown) {
   res.statusCode = status;
@@ -25,7 +42,7 @@ function sendJson(res: ServerResponse, status: number, body: unknown) {
   // Never let another site embed or sniff these responses.
   res.setHeader('X-Content-Type-Options', 'nosniff');
   res.setHeader('Cross-Origin-Resource-Policy', 'same-origin');
-  res.end(JSON.stringify(body));
+  res.end(JSON.stringify(redactErrorBody(body)));
 }
 
 /** A merge request is a few hundred bytes; anything bigger is not ours. */
@@ -112,6 +129,38 @@ export function createReviewHandler(service: ReviewService) {
         sendJson(res, 200, { success: true, data: await service.ghStatus() });
         return;
       }
+      if (req.method === 'GET' && route === '/tests/status') {
+        sendJson(res, 200, { success: true, data: await service.testServer() });
+        return;
+      }
+      if (req.method === 'GET' && route === '/tests/job') {
+        const since = Number(url.searchParams.get('since') ?? 0);
+        sendJson(res, 200, { success: true, data: service.getSpecRun(url.searchParams.get('id'), since) });
+        return;
+      }
+      if (req.method === 'POST' && (route === '/decision' || route === '/tests/run' || route === '/tests/cancel')) {
+        let body: Record<string, unknown>;
+        try {
+          const parsed = JSON.parse(await readBody(req));
+          if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('not an object');
+          body = parsed as Record<string, unknown>;
+        } catch (err) {
+          if (err instanceof BodyTooLargeError) {
+            sendJson(res, 413, { success: false, error: err.message });
+            return;
+          }
+          sendJson(res, 400, { success: false, error: 'Request body must be a JSON object.' });
+          return;
+        }
+        if (route === '/decision') {
+          sendJson(res, 200, { success: true, data: await service.submitReview({ branch: body.branch, expectedSha: body.expectedSha, decision: body.decision, info: body.info }) });
+        } else if (route === '/tests/run') {
+          sendJson(res, 200, { success: true, data: await service.startSpecRun({ branch: body.branch, expectedSha: body.expectedSha, specs: body.specs }) });
+        } else {
+          sendJson(res, 200, { success: true, data: await service.cancelSpecRun(body.id) });
+        }
+        return;
+      }
       if (req.method === 'GET' && route === '/list') {
         sendJson(res, 200, { success: true, data: await service.list() });
         return;
@@ -148,12 +197,16 @@ export function createReviewHandler(service: ReviewService) {
         sendJson(res, 200, { success: true, data });
         return;
       }
-      if (['/status', '/gh', '/list', '/detail', '/merge'].includes(route)) {
+      if (['/status', '/gh', '/list', '/detail', '/merge', '/decision', '/tests/status', '/tests/job', '/tests/run', '/tests/cancel'].includes(route)) {
         sendJson(res, 405, { success: false, error: 'Method not allowed' });
         return;
       }
       sendJson(res, 404, { success: false, error: 'Unknown review endpoint.' });
     } catch (err) {
+      if (err instanceof SpecGuardError || err instanceof OverlayError) {
+        sendJson(res, err instanceof SpecGuardError ? 403 : 409, { success: false, error: err.message });
+        return;
+      }
       if (err instanceof ReviewError) {
         sendJson(res, err.status, { success: false, error: err.message, details: err.details });
         return;
@@ -212,7 +265,14 @@ export function reviewPlugin(options: ReviewPluginOptions = {}): Plugin {
         baseUrl: jiraOpts.baseUrl,
       });
       const service = createReviewService(
-        { repoPath, baseBranch: QA_BASE_BRANCH, remote: options.remote || 'origin', projectKey },
+        {
+          repoPath,
+          baseBranch: QA_BASE_BRANCH,
+          remote: options.remote || 'origin',
+          projectKey,
+          serverRepoPath: options.serverRepoPath ? expandHome(options.serverRepoPath) : undefined,
+          testServerPort: options.testServerPort,
+        },
         { jira },
       );
       server.middlewares.use(securityHeaders);
@@ -222,6 +282,14 @@ export function reviewPlugin(options: ReviewPluginOptions = {}): Plugin {
         server.middlewares.use('/api/review', exposedServerHandler);
         return;
       }
+      // If the dev server died during a spec run, finish restoring the test
+      // server's checkout; and on any exit, stop a run in progress and restore it.
+      try {
+        recoverStaleOverlays();
+      } catch {
+        // nothing to recover
+      }
+      process.once('exit', () => service.shutdown());
       server.middlewares.use('/api/review', createReviewHandler(service));
     },
   };

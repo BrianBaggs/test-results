@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { computeLights } from '../utils/reviewLights';
-import { gh, list, status } from './reviewFixtures';
+import { gh, list, status, testServer } from './reviewFixtures';
 import type { ReviewStatus } from '../types/review';
 
 const light = (lights: ReturnType<typeof computeLights>, id: string) => lights.find((l) => l.id === id)!;
@@ -10,14 +10,16 @@ const withReq = (id: string, over: object): ReviewStatus => {
 };
 
 describe('computeLights', () => {
-  it('shows four lights, all green, when everything is ready', () => {
-    const lights = computeLights(status(), list(), gh());
+  it('shows five lights, all green, when everything is ready', () => {
+    const lights = computeLights(status(), list(), gh(), false, testServer());
     expect(lights.map((l) => [l.id, l.state])).toEqual([
       ['git', 'ok'],
       ['repo', 'ok'],
       ['acli', 'ok'],
       ['gh', 'ok'],
+      ['test', 'ok'],
     ]);
+    expect(light(lights, 'test').text).toBe('Running on :5017');
     expect(light(lights, 'acli').text).toBe('Signed in');
     expect(light(lights, 'gh').text).toBe('Signed in as BrianBaggs');
     expect(lights.every((l) => !l.hint)).toBe(true);
@@ -25,7 +27,7 @@ describe('computeLights', () => {
 
   it('shows everything as checking before anything has loaded', () => {
     const lights = computeLights(null, null, null);
-    expect(lights.map((l) => l.state)).toEqual(['checking', 'checking', 'checking', 'checking']);
+    expect(lights.map((l) => l.state)).toEqual(['checking', 'checking', 'checking', 'checking', 'checking']);
   });
 
   it('keeps acli checking until the Review column has been read (that is the sign-in test)', () => {
@@ -72,6 +74,17 @@ describe('computeLights', () => {
     const out = light(computeLights(status(), list(), gh({ state: 'not-authenticated', account: null, command: 'gh auth login' })), 'gh');
     expect(out).toMatchObject({ state: 'warn', text: 'Not signed in', hint: { command: 'gh auth login' } });
     expect(light(computeLights(status(), list(), gh({ state: 'error', account: null })), 'gh')).toMatchObject({ state: 'warn', text: 'Error' });
+  });
+
+  it('test server down: red, with how to start it (the app never starts it)', () => {
+    const l = light(computeLights(status(), list(), gh(), false, testServer({ up: false })), 'test');
+    expect(l).toMatchObject({ state: 'bad', text: 'Not running', hint: { command: 'yarn test:server' } });
+    expect(l.hint?.message).toMatch(/never starts it/);
+  });
+
+  it('test server still being checked is grey, and uses the reported port', () => {
+    expect(light(computeLights(status(), list(), gh(), false, null), 'test').state).toBe('checking');
+    expect(light(computeLights(status(), list(), gh(), false, testServer({ port: 6000 })), 'test').text).toBe('Running on :6000');
   });
 
   it('gh signed in without a known account', () => {

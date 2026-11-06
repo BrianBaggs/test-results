@@ -6,19 +6,20 @@ import { Alert, AlertDescription } from '@/components/ui/alert';
 import { cn } from '@/lib/utils';
 import { plural } from '@/utils/reviewFormat';
 import { computeLights } from '@/utils/reviewLights';
-import { fetchGhStatus, fetchReviewList, fetchReviewStatus } from '@/utils/reviewApi';
+import { fetchGhStatus, fetchReviewList, fetchReviewStatus, fetchTestServer } from '@/utils/reviewApi';
 import { ErrorBanner, Skeleton } from './Feedback';
 import { PullRequestTable } from './PullRequestTable';
 import { ReviewDetailView } from './ReviewDetailView';
 import { SetupPanel } from './SetupPanel';
 import { StatusBar } from './StatusBar';
-import type { GhStatus, ReviewBranch, ReviewList, ReviewStatus, ReviewTicket } from '@/types/review';
+import type { GhStatus, ReviewBranch, ReviewList, ReviewStatus, ReviewTicket, TestServerStatus } from '@/types/review';
 
 interface Selection {
   ticket: ReviewTicket;
   branch: ReviewBranch;
 }
 
+const TEST_SERVER_UNKNOWN: TestServerStatus = { up: false, host: '127.0.0.1', port: 5017, startCommand: 'yarn test:server', activeJob: null };
 const GH_CHECK_FAILED: GhStatus = { state: 'error', account: null, host: null, detail: 'Could not check the GitHub CLI status.' };
 
 const ListSkeleton: React.FC = () => (
@@ -39,6 +40,7 @@ export const ReviewPage: React.FC = () => {
   const [status, setStatus] = useState<ReviewStatus | null>(null);
   const [list, setList] = useState<ReviewList | null>(null);
   const [gh, setGh] = useState<GhStatus | null>(null);
+  const [testServer, setTestServer] = useState<TestServerStatus | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [selection, setSelection] = useState<Selection | null>(null);
@@ -47,6 +49,7 @@ export const ReviewPage: React.FC = () => {
     // The GitHub CLI light is informational and slower (it asks GitHub), so it
     // never holds up the page and can never fail it.
     void fetchGhStatus().then(setGh, () => setGh(GH_CHECK_FAILED));
+    void fetchTestServer().then(setTestServer, () => setTestServer(TEST_SERVER_UNKNOWN));
     try {
       const st = await fetchReviewStatus();
       setStatus(st);
@@ -67,6 +70,7 @@ export const ReviewPage: React.FC = () => {
   const refresh = () => {
     setLoading(true);
     setGh(null);
+    setTestServer(null);
     void load();
   };
 
@@ -91,7 +95,7 @@ export const ReviewPage: React.FC = () => {
   const setupNeeded = !!status && !status.ok;
   const tickets = list?.tickets ?? [];
   const openCount = tickets.reduce((n, t) => n + t.branches.filter((b) => b.unmerged > 0).length, 0);
-  const lights = computeLights(status, list, gh, !!error && !list);
+  const lights = computeLights(status, list, gh, !!error && !list, testServer);
 
   return (
     <div className="space-y-6">

@@ -1,4 +1,5 @@
 import { execFile } from 'node:child_process';
+import { redactSecrets } from './redact.ts';
 
 /**
  * The ONLY place this app runs the GitHub CLI (`gh`), and it can do exactly
@@ -12,7 +13,7 @@ import { execFile } from 'node:child_process';
  * Do not loosen this; see server/ghStatus.test.ts.
  */
 
-export type GhState = 'ready' | 'not-installed' | 'not-authenticated' | 'error';
+type GhState = 'ready' | 'not-installed' | 'not-authenticated' | 'error';
 
 export interface GhStatus {
   state: GhState;
@@ -33,14 +34,14 @@ export class GhGuardError extends Error {
 }
 
 /** The one permitted invocation. */
-export const ALLOWED_GH_ARGS = ['auth', 'status'] as const;
+const ALLOWED_GH_ARGS = ['auth', 'status'] as const;
 
 export function assertAllowedGhCommand(args: string[]): void {
   const ok = Array.isArray(args) && args.length === ALLOWED_GH_ARGS.length && ALLOWED_GH_ARGS.every((a, i) => args[i] === a);
   if (!ok) throw new GhGuardError(`only "gh ${ALLOWED_GH_ARGS.join(' ')}" is allowed, never "gh ${Array.isArray(args) ? args.join(' ') : '?'}".`);
 }
 
-export interface GhRunResult {
+interface GhRunResult {
   code: number;
   stdout: string;
   stderr: string;
@@ -48,7 +49,7 @@ export interface GhRunResult {
 
 export type GhRunner = (args: string[]) => Promise<GhRunResult>;
 
-export const defaultGhRunner: GhRunner = (args) =>
+const defaultGhRunner: GhRunner = (args) =>
   new Promise((resolve) => {
     execFile(
       'gh',
@@ -106,7 +107,7 @@ export function createGhChecker(deps: { findExecutable: (bin: string) => boolean
       if (/ENOENT/.test(r.stderr)) {
         return { state: 'not-installed', account: null, host: null, detail: "The GitHub CLI (gh) isn't installed.", ...INSTALL };
       }
-      const first = text.trim().split('\n').find(Boolean) ?? 'unknown error';
+      const first = redactSecrets(text.trim().split('\n').find(Boolean) ?? 'unknown error');
       return { state: 'error', account: null, host: null, detail: `Could not check gh: ${first}` };
     },
   };

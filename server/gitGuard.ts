@@ -165,4 +165,3 @@ export function createGitGuard(ctx: GitGuardContext) {
   };
 }
 
-export type GitGuard = ReturnType<typeof createGitGuard>;

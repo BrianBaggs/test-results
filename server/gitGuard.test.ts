@@ -262,17 +262,29 @@ describe('no other way to run commands (shells, other binaries, unguarded gh)', 
     .filter((f) => f.endsWith('.ts') && !f.endsWith('.test.ts'))
     .map((f) => ({ f, src: readFileSync(join(__dirname, f), 'utf8') }));
 
-  it('spawns processes in exactly three places, each behind its own guard: git, acli and gh', () => {
-    const spawners = files.filter(({ src }) => /(?<![.\w])(execFile|execFileSync|exec|execSync|spawn|spawnSync|fork)\s*\(/.test(src)).map(({ f }) => f);
-    expect(spawners.sort()).toEqual(['acli.ts', 'ghStatus.ts', 'reviewGit.ts']);
+  it('imports child_process in exactly four places, each behind its own guard: git, acli, gh and the spec runner', () => {
+    const spawners = files.filter(({ src }) => /from 'node:child_process'/.test(src)).map(({ f }) => f);
+    expect(spawners.sort()).toEqual(['acli.ts', 'ghStatus.ts', 'reviewGit.ts', 'specRunner.ts']);
     for (const { f, src } of files) {
       if (f === 'acli.ts') expect(src).toMatch(/execFile\('acli'/);
       if (f === 'ghStatus.ts') expect(src).toMatch(/execFile\(\s*'gh'/);
       if (f === 'reviewGit.ts') expect(src).toMatch(/execFile\(\s*'git'/);
+      if (f === 'specRunner.ts') expect(src).toMatch(/\)\('yarn', args, \{/);
     }
   });
 
-  it('never launches a shell or any binary other than git, acli and gh', () => {
+  it('the spec runner starts only `yarn`, only after its guard, with no shell', () => {
+    const src = files.find(({ f }) => f === 'specRunner.ts')!.src;
+    expect(src).toMatch(/assertAllowedSpecCommand\('yarn', args, opts\.cwd\);[^]*\)\('yarn', args, \{/);
+    expect(src).not.toMatch(/shell\s*:\s*true/);
+    expect(src.match(/\('(?:[a-z]+)', args, \{/g)).toEqual(["('yarn', args, {"]);
+    // nothing else spawns it: specRun.ts only goes through startSpecProcess
+    const run = files.find(({ f }) => f === 'specRun.ts')!.src;
+    expect(run).not.toMatch(/child_process/);
+    expect(run).toMatch(/startSpecProcess\(/);
+  });
+
+  it('never launches a shell or any binary other than git, acli, gh and (guarded) yarn', () => {
     for (const { src } of files) {
       expect(src).not.toMatch(/execFile\(\s*['"`](?!git['"`]|acli['"`]|gh['"`])/);
       expect(src).not.toMatch(/(?<![.\w])(exec|execSync|spawn|spawnSync)\s*\(/);

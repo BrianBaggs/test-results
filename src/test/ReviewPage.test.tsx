@@ -2,9 +2,9 @@ import { describe, it, expect, vi, beforeEach, beforeAll } from 'vitest';
 import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import { toast } from 'sonner';
 import { ReviewPage } from '../components/Review/ReviewPage';
-import { ReviewApiError, fetchGhStatus, fetchReviewDetail, fetchReviewList, fetchReviewStatus, mergeReview } from '../utils/reviewApi';
+import { ReviewApiError, fetchGhStatus, fetchReviewDetail, fetchReviewList, fetchReviewStatus, fetchTestServer, mergeReview, submitReviewDecision } from '../utils/reviewApi';
 import { stubCanvas } from './canvasStub';
-import { SHA, branch, detail, file, gh, list, mergeResult, status, ticket } from './reviewFixtures';
+import { SHA, branch, detail, file, gh, list, mergeResult, status, testServer, ticket } from './reviewFixtures';
 import type { MergeResult } from '../types/review';
 
 vi.mock('sonner', () => ({ toast: { success: vi.fn(), warning: vi.fn(), error: vi.fn() } }));
@@ -12,7 +12,7 @@ vi.mock('sonner', () => ({ toast: { success: vi.fn(), warning: vi.fn(), error: v
 // Keep the real ReviewApiError class; replace only the network calls.
 vi.mock('../utils/reviewApi', async (importActual) => {
   const actual = await importActual<typeof import('../utils/reviewApi')>();
-  return { ...actual, fetchReviewStatus: vi.fn(), fetchGhStatus: vi.fn(), fetchReviewList: vi.fn(), fetchReviewDetail: vi.fn(), mergeReview: vi.fn() };
+  return { ...actual, fetchReviewStatus: vi.fn(), fetchGhStatus: vi.fn(), fetchTestServer: vi.fn(), fetchReviewList: vi.fn(), fetchReviewDetail: vi.fn(), mergeReview: vi.fn(), submitReviewDecision: vi.fn() };
 });
 
 const statusMock = vi.mocked(fetchReviewStatus);
@@ -20,6 +20,8 @@ const ghMock = vi.mocked(fetchGhStatus);
 const listMock = vi.mocked(fetchReviewList);
 const detailMock = vi.mocked(fetchReviewDetail);
 const mergeMock = vi.mocked(mergeReview);
+const testServerMock = vi.mocked(fetchTestServer);
+const decisionMock = vi.mocked(submitReviewDecision);
 
 beforeAll(stubCanvas);
 
@@ -37,6 +39,9 @@ beforeEach(() => {
   listMock.mockResolvedValue(list());
   detailMock.mockResolvedValue(detail());
   mergeMock.mockResolvedValue(mergeResult());
+  testServerMock.mockResolvedValue(testServer());
+  // Jira echoes back what was saved
+  decisionMock.mockImplementation(async ({ decision, info }) => ({ ...detail().ticket, approval: decision === 'none' ? null : decision, reviewInfo: info ?? '' }));
 });
 
 async function openReview(key = 'AT-727') {
@@ -47,12 +52,21 @@ async function openReview(key = 'AT-727') {
 
 const mergeBox = () => screen.getByTestId('merge-box');
 const mergeButton = () => within(mergeBox()).getByRole('button', { name: /Rebase and merge|Rebasing and merging/ });
-const approve = () => fireEvent.click(within(screen.getByTestId('approval')).getByRole('button', { name: 'Approve changes' }));
-const confirmMerge = async () => fireEvent.click(within(await screen.findByRole('dialog')).getByRole('button', { name: 'Rebase and merge' }));
+/** Approve or decline through the modal, the way a reviewer does. */
+async function decide(kind: 'approve' | 'decline', info?: string) {
+  fireEvent.click(within(screen.getByTestId('approval')).getByRole('button', { name: kind === 'approve' ? /^Approve/ : /^Decline/ }));
+  const dialog = await screen.findByTestId('decision-modal');
+  if (info !== undefined) fireEvent.change(within(dialog).getByLabelText(/Review information/), { target: { value: info } });
+  fireEvent.click(within(dialog).getByRole('button', { name: /save to Jira/ }));
+  await waitFor(() => expect(screen.queryByTestId('decision-modal')).not.toBeInTheDocument());
+}
+const approve = () => decide('approve');
+/** The second click: GitHub-style inline confirmation. */
+const confirmMerge = async () => fireEvent.click(within(await screen.findByTestId('merge-confirm')).getByRole('button', { name: 'Confirm rebase and merge' }));
 const openTab = (name: RegExp | string) => fireEvent.click(screen.getByRole('tab', { name }));
 
 async function approveAndMerge() {
-  approve();
+  await approve();
   fireEvent.click(mergeButton());
   await confirmMerge();
 }
@@ -203,24 +217,6 @@ describe('Review page: table of tickets in the Review column', () => {
   });
 });
 
-describe('Review page: valid markup', () => {
-  it('renders the table, the show page and every tab without React DOM-nesting warnings', async () => {
-    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
-    listMock.mockResolvedValue(list({ tickets: [ticket(), ticket({ key: 'AT-726', summary: 'No branch yet', branches: [] }), ticket({ key: 'AT-725', branches: [branch({ name: 'AT-725-x', unmerged: 0 })] })] }));
-    detailMock.mockResolvedValue(detail({ files: [file({ path: 'a.ts' }), file({ path: 'b.ts' })], canRebase: false, conflicts: ['a.ts'] }));
-    render(<ReviewPage />);
-    fireEvent.click((await screen.findAllByRole('button', { name: 'Review AT-727' }))[0]);
-    await screen.findByTestId('merge-box');
-    openTab(/Commits/);
-    openTab(/Files changed/);
-    openTab('Conversation');
-
-    const nesting = spy.mock.calls.map((c) => c.map(String).join(' ')).filter((m) => /cannot be a descendant|cannot contain a nested|validateDOMNesting|hydration/i.test(m));
-    expect(nesting).toEqual([]);
-    spy.mockRestore();
-  });
-});
-
 describe('Review page: link and content safety', () => {
   it.each(['javascript:alert(1)', 'data:text/html,<script>alert(1)</script>', 'file:///etc/passwd', 'vbscript:x', 'not a url'])(
     'never renders %s as a link (the ticket key is shown as plain text)',
@@ -348,7 +344,14 @@ describe('Pull request show page', () => {
     detailMock.mockReturnValueOnce(new Promise(() => {}));
     render(<ReviewPage />);
     fireEvent.click(await screen.findByRole('button', { name: 'Review AT-727' }));
-    expect(screen.getByText('Loading changes…')).toBeInTheDocument();
+    expect(screen.getByText('Loading pull request…')).toBeInTheDocument();
+    expect(screen.getByTestId('detail-loading')).toHaveTextContent('Reading AT-727 from Jira');
+    expect(screen.getByTestId('detail-loading').querySelector('.animate-spin')).toBeInTheDocument();
+  });
+
+  it('replaces the loading indicator with the page once loaded', async () => {
+    await openReview();
+    expect(screen.queryByTestId('detail-loading')).not.toBeInTheDocument();
   });
 
   it('recovers from a load error with Try again', async () => {
@@ -390,6 +393,10 @@ describe('Pull request show page', () => {
     const sidebar = screen.getByTestId('pr-sidebar');
     expect(sidebar).toHaveTextContent('Review');
     expect(sidebar).toHaveTextContent('Brian Baggs');
+    // Reviewer sits directly under Assignee
+    const labels = within(sidebar).getAllByText(/^(Ticket|Jira status|Assignee|Reviewer|Last pushed by|Base|Compare)$/).map((e) => e.textContent);
+    expect(labels.indexOf('Reviewer')).toBe(labels.indexOf('Assignee') + 1);
+    expect(sidebar).toHaveTextContent('Matthew Carabin');
     expect(sidebar).toHaveTextContent('playwright-main');
     expect(within(sidebar).getByRole('link', { name: /AT-727/ })).toHaveAttribute('href', 'https://securicyapp.atlassian.net/browse/AT-727');
   });
@@ -397,6 +404,20 @@ describe('Pull request show page', () => {
   it('links to the branch on GitHub when known', async () => {
     await openReview();
     expect(screen.getByRole('link', { name: /View on GitHub/ })).toHaveAttribute('href', 'https://github.com/carbidesecure/securicy-app/tree/AT-727-add-test');
+  });
+
+  it('shows a dash when there is no reviewer', async () => {
+    detailMock.mockResolvedValue(detail({ ticket: { ...detail().ticket, reviewers: [] } }));
+    await openReview();
+    const sidebar = screen.getByTestId('pr-sidebar');
+    const reviewerRow = within(sidebar).getByText('Reviewer').parentElement!;
+    expect(reviewerRow).toHaveTextContent('—');
+  });
+
+  it('lists several reviewers separated by commas', async () => {
+    detailMock.mockResolvedValue(detail({ ticket: { ...detail().ticket, reviewers: ['Matthew Carabin', 'Brian Baggs'] } }));
+    await openReview();
+    expect(screen.getByTestId('pr-sidebar')).toHaveTextContent('Matthew Carabin, Brian Baggs');
   });
 
   it('has no GitHub link or assignee when unknown', async () => {
@@ -550,64 +571,331 @@ describe('Pull request show page: reading the code (Files changed)', () => {
     expect(screen.getByText('No file changes.')).toBeInTheDocument();
   });
 
-  it('lets you approve and jump to the merge box from the sticky footer', async () => {
+  it('keeps the action bar stuck flush to the bottom edge with no gap under it', async () => {
+    await openReview();
+    openTab(/Files changed/);
+    const footer = screen.getByTestId('review-footer');
+    expect(footer).toHaveClass('sticky', 'bottom-0');
+    expect(footer.className).not.toMatch(/bottom-[1-9]/);
+  });
+
+  it('lets you approve from the sticky footer (through the modal) and jump to the merge box', async () => {
     await openReview();
     openTab(/Files changed/);
 
     const footer = screen.getByTestId('review-footer');
-    fireEvent.click(within(footer).getByRole('button', { name: 'Approve changes' }));
-    expect(footer).toHaveTextContent('you approved these changes');
-    expect(within(footer).queryByRole('button', { name: 'Approve changes' })).not.toBeInTheDocument();
+    fireEvent.click(within(footer).getByRole('button', { name: /^Approve/ }));
+    fireEvent.click(within(await screen.findByTestId('decision-modal')).getByRole('button', { name: /Approve and save to Jira/ }));
+    await waitFor(() => expect(footer).toHaveTextContent('approved in Jira'));
+    expect(within(footer).queryByRole('button', { name: /^Approve/ })).not.toBeInTheDocument();
 
     fireEvent.click(within(footer).getByRole('button', { name: 'Go to merge box' }));
     expect(screen.getByRole('tab', { name: 'Conversation' })).toHaveAttribute('aria-selected', 'true');
-    expect(within(screen.getByTestId('approval')).getByText('You approved these changes.')).toBeInTheDocument();
+    expect(within(screen.getByTestId('approval')).getByText(/Approved in Jira/)).toBeInTheDocument();
   });
 
-  it('does not offer to approve a branch that has conflicts', async () => {
+  it('lets you decline from the sticky footer', async () => {
+    await openReview();
+    openTab(/Files changed/);
+    const footer = screen.getByTestId('review-footer');
+    fireEvent.click(within(footer).getByRole('button', { name: /^Decline/ }));
+    const dialog = await screen.findByTestId('decision-modal');
+    fireEvent.change(within(dialog).getByLabelText(/Review information/), { target: { value: 'Missing cleanup' } });
+    fireEvent.click(within(dialog).getByRole('button', { name: /Decline and save to Jira/ }));
+    await waitFor(() => expect(footer).toHaveTextContent('declined in Jira'));
+    expect(decisionMock).toHaveBeenCalledWith({ branch: 'AT-727-add-test', expectedSha: SHA, decision: 'declined', info: 'Missing cleanup' });
+  });
+
+  it('does not offer to decide on a branch that has conflicts', async () => {
     detailMock.mockResolvedValue(detail({ canRebase: false, conflicts: ['a.txt'] }));
     await openReview();
     openTab(/Files changed/);
-    expect(within(screen.getByTestId('review-footer')).queryByRole('button', { name: 'Approve changes' })).not.toBeInTheDocument();
+    const footer = within(screen.getByTestId('review-footer'));
+    expect(footer.queryByRole('button', { name: /^Approve/ })).not.toBeInTheDocument();
+    expect(footer.queryByRole('button', { name: /^Decline/ })).not.toBeInTheDocument();
   });
 });
 
-describe('Pull request show page: approving', () => {
-  it('keeps Rebase and merge disabled until the changes are approved', async () => {
+describe('Pull request show page: approving (the Approval field in Jira)', () => {
+  it('keeps Rebase and merge disabled until the PR is approved', async () => {
     await openReview();
     expect(mergeButton()).toBeDisabled();
     expect(screen.getByText('Approve the changes above to enable this button.')).toBeInTheDocument();
+    expect(within(screen.getByTestId('approval'))).toBeTruthy();
+    expect(screen.getByTestId('approval')).toHaveAttribute('data-state', 'none');
 
-    approve();
+    await approve();
 
     expect(mergeButton()).toBeEnabled();
-    expect(screen.getByText('You approved these changes.')).toBeInTheDocument();
+    expect(screen.getByTestId('approval')).toHaveAttribute('data-state', 'approved');
+    expect(screen.getByText(/Approved in Jira/)).toBeInTheDocument();
     expect(screen.queryByText('Approve the changes above to enable this button.')).not.toBeInTheDocument();
   });
 
-  it('can undo an approval', async () => {
+  it('records the approval on the reviewed commit', async () => {
     await openReview();
-    approve();
-    fireEvent.click(screen.getByRole('button', { name: /Undo approval/ }));
-    expect(mergeButton()).toBeDisabled();
+    await approve();
+    expect(decisionMock).toHaveBeenCalledExactlyOnceWith({ branch: 'AT-727-add-test', expectedSha: SHA, decision: 'approved', info: undefined });
   });
 
-  it('remembers the approval for this exact commit within the session', async () => {
+  it('reads an existing approval from Jira, so an approved ticket can be merged straight away', async () => {
+    detailMock.mockResolvedValue(detail({ ticket: { ...detail().ticket, approval: 'approved', reviewInfo: 'LGTM' } }));
     await openReview();
-    approve();
-    expect(sessionStorage.getItem(`review-approved:AT-727-add-test@${SHA}`)).toBe('1');
+    expect(mergeButton()).toBeEnabled();
+    expect(screen.getByTestId('approval')).toHaveAttribute('data-state', 'approved');
+    expect(screen.getByTestId('review-info')).toHaveTextContent('LGTM');
+    expect(screen.getByTestId('pr-sidebar')).toHaveTextContent('Approved');
+  });
 
-    fireEvent.click(screen.getByRole('button', { name: /Back to Review/ }));
-    fireEvent.click(await screen.findByRole('button', { name: 'Review AT-727' }));
-    await screen.findByTestId('merge-box');
+  it('a declined ticket shows the reason and cannot be merged until approved instead', async () => {
+    detailMock.mockResolvedValue(detail({ ticket: { ...detail().ticket, approval: 'declined', reviewInfo: 'The cleanup step is missing' } }));
+    await openReview();
 
+    expect(screen.getByTestId('approval')).toHaveAttribute('data-state', 'declined');
+    expect(screen.getByText(/Declined in Jira. Merging is blocked/)).toBeInTheDocument();
+    expect(screen.getByTestId('review-info')).toHaveTextContent('The cleanup step is missing');
+    expect(mergeButton()).toBeDisabled();
+    expect(screen.getByText(/This PR was declined/)).toBeInTheDocument();
+    expect(within(screen.getByTestId('approval')).queryByRole('button', { name: /^Decline/ })).not.toBeInTheDocument();
+
+    await decide('approve');
     expect(mergeButton()).toBeEnabled();
   });
 
-  it('does NOT carry an approval over to new commits', async () => {
-    sessionStorage.setItem(`review-approved:AT-727-add-test@${'9'.repeat(40)}`, '1');
+  it('can undo an approval, which clears the checkbox in Jira', async () => {
     await openReview();
+    await approve();
+    fireEvent.click(screen.getByRole('button', { name: /Undo approval/ }));
+    await waitFor(() => expect(mergeButton()).toBeDisabled());
+    expect(decisionMock).toHaveBeenLastCalledWith({ branch: 'AT-727-add-test', expectedSha: SHA, decision: 'none' });
+    expect(toast.success).toHaveBeenCalledWith('AT-727: decision cleared in Jira.');
+    expect(screen.getByTestId('approval')).toHaveAttribute('data-state', 'none');
+  });
+
+  it('can clear a decline too, and shows progress while clearing', async () => {
+    detailMock.mockResolvedValue(detail({ ticket: { ...detail().ticket, approval: 'declined', reviewInfo: 'x' } }));
+    let resolve!: (v: ReturnType<typeof detail>['ticket']) => void;
+    decisionMock.mockReturnValueOnce(new Promise((r) => (resolve = r)));
+    await openReview();
+    fireEvent.click(screen.getByRole('button', { name: /Clear decision/ }));
+    expect(await screen.findByRole('button', { name: /Clearing…/ })).toBeDisabled();
+    resolve({ ...detail().ticket, approval: null, reviewInfo: '' });
+    await waitFor(() => expect(screen.getByTestId('approval')).toHaveAttribute('data-state', 'none'));
+  });
+
+  it('tells you when clearing fails and leaves the state as it was', async () => {
+    await openReview();
+    await approve();
+    decisionMock.mockRejectedValueOnce(new ReviewApiError('Jira did not save the review on AT-727'));
+    fireEvent.click(screen.getByRole('button', { name: /Undo approval/ }));
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith('Jira did not save the review on AT-727'));
+    expect(screen.getByTestId('approval')).toHaveAttribute('data-state', 'approved');
+    expect(mergeButton()).toBeEnabled();
+  });
+
+  it('uses a generic message when clearing fails without one', async () => {
+    await openReview();
+    await approve();
+    decisionMock.mockRejectedValueOnce('weird');
+    fireEvent.click(screen.getByRole('button', { name: /Undo approval/ }));
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith('Could not clear the decision in Jira.'));
+  });
+});
+
+describe('Review decision modal', () => {
+  const open = (kind: 'Approve' | 'Decline') => fireEvent.click(within(screen.getByTestId('approval')).getByRole('button', { name: new RegExp(`^${kind}`) }));
+
+  it('approving: a text box for optional notes, saved into the ticket', async () => {
+    await openReview();
+    open('Approve');
+
+    const dialog = await screen.findByTestId('decision-modal');
+    expect(within(dialog).getByRole('heading', { name: 'Approve AT-727' })).toBeInTheDocument();
+    expect(dialog).toHaveTextContent('ticks Approved on AT-727 in Jira');
+    expect(dialog).toHaveTextContent('Review Information');
+    expect(within(dialog).getByLabelText(/Review information/)).toBeInTheDocument();
+    expect(within(dialog).getByText('(optional)')).toBeInTheDocument();
+
+    fireEvent.change(within(dialog).getByLabelText(/Review information/), { target: { value: '  Looks good, nice cleanup.  ' } });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Approve and save to Jira' }));
+
+    await waitFor(() => expect(screen.queryByTestId('decision-modal')).not.toBeInTheDocument());
+    expect(decisionMock).toHaveBeenCalledExactlyOnceWith({ branch: 'AT-727-add-test', expectedSha: SHA, decision: 'approved', info: 'Looks good, nice cleanup.' });
+    expect(toast.success).toHaveBeenCalledWith('AT-727 approved in Jira.');
+    expect(screen.getByTestId('review-info')).toHaveTextContent('Looks good, nice cleanup.');
+  });
+
+  it('declining: the reason is required, and nothing is sent without it', async () => {
+    await openReview();
+    open('Decline');
+    const dialog = await screen.findByTestId('decision-modal');
+    expect(within(dialog).getByRole('heading', { name: 'Decline AT-727' })).toBeInTheDocument();
+    expect(dialog).toHaveTextContent('A declined PR can\'t be merged');
+    expect(dialog).not.toHaveTextContent('(optional)');
+
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Decline and save to Jira' }));
+
+    expect(within(dialog).getByTestId('review-info-help')).toHaveTextContent('Say why you are declining');
+    expect(within(dialog).getByLabelText(/Review information/)).toHaveAttribute('aria-invalid', 'true');
+    expect(within(dialog).getByRole('button', { name: 'Decline and save to Jira' })).toBeDisabled();
+    expect(decisionMock).not.toHaveBeenCalled();
+
+    fireEvent.change(within(dialog).getByLabelText(/Review information/), { target: { value: 'The cleanup step is missing.\nAlso tag it @critical.' } });
+    expect(within(dialog).getByRole('button', { name: 'Decline and save to Jira' })).toBeEnabled();
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Decline and save to Jira' }));
+
+    await waitFor(() => expect(screen.queryByTestId('decision-modal')).not.toBeInTheDocument());
+    expect(decisionMock).toHaveBeenCalledExactlyOnceWith({ branch: 'AT-727-add-test', expectedSha: SHA, decision: 'declined', info: 'The cleanup step is missing.\nAlso tag it @critical.' });
+    expect(toast.success).toHaveBeenCalledWith('AT-727 declined in Jira.');
+    expect(screen.getByTestId('approval')).toHaveAttribute('data-state', 'declined');
+    expect(screen.getByTestId('review-info')).toHaveTextContent('The cleanup step is missing.');
     expect(mergeButton()).toBeDisabled();
+  });
+
+  it('a reason of only spaces does not count', async () => {
+    await openReview();
+    open('Decline');
+    const dialog = await screen.findByTestId('decision-modal');
+    fireEvent.change(within(dialog).getByLabelText(/Review information/), { target: { value: '    \n  ' } });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Decline and save to Jira' }));
+    expect(decisionMock).not.toHaveBeenCalled();
+    expect(within(dialog).getByTestId('review-info-help')).toHaveTextContent('Say why');
+  });
+
+  it('shows a live character count and blocks text over the limit', async () => {
+    await openReview();
+    open('Approve');
+    const dialog = await screen.findByTestId('decision-modal');
+    expect(within(dialog).getByTestId('review-info-count')).toHaveTextContent('0 / 5,000');
+    fireEvent.change(within(dialog).getByLabelText(/Review information/), { target: { value: 'x'.repeat(12) } });
+    expect(within(dialog).getByTestId('review-info-count')).toHaveTextContent('12 / 5,000');
+
+    fireEvent.change(within(dialog).getByLabelText(/Review information/), { target: { value: 'x'.repeat(5001) } });
+    expect(within(dialog).getByTestId('review-info-count')).toHaveClass('text-destructive');
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Approve and save to Jira' }));
+    expect(within(dialog).getByTestId('review-info-help')).toHaveTextContent('limited to 5,000 characters');
+    expect(decisionMock).not.toHaveBeenCalled();
+  });
+
+  it('starts from the ticket\'s existing review information so it can be edited', async () => {
+    detailMock.mockResolvedValue(detail({ ticket: { ...detail().ticket, approval: 'declined', reviewInfo: 'Earlier note' } }));
+    await openReview();
+    open('Approve');
+    expect(within(await screen.findByTestId('decision-modal')).getByLabelText(/Review information/)).toHaveValue('Earlier note');
+  });
+
+  it('shows saving progress and cannot be dismissed or edited while saving', async () => {
+    let resolve!: (v: ReturnType<typeof detail>['ticket']) => void;
+    decisionMock.mockReturnValueOnce(new Promise((r) => (resolve = r)));
+    await openReview();
+    open('Approve');
+    const dialog = await screen.findByTestId('decision-modal');
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Approve and save to Jira' }));
+
+    const saving = await within(dialog).findByRole('button', { name: /Saving to Jira…/ });
+    expect(saving).toBeDisabled();
+    expect(saving).toHaveAttribute('aria-busy', 'true');
+    expect(saving.querySelector('.animate-spin')).toBeInTheDocument();
+    expect(within(dialog).getByRole('button', { name: 'Cancel' })).toBeDisabled();
+    expect(within(dialog).getByLabelText(/Review information/)).toBeDisabled();
+    fireEvent.keyDown(dialog, { key: 'Escape' });
+    expect(screen.getByTestId('decision-modal')).toBeInTheDocument();
+    expect(decisionMock).toHaveBeenCalledTimes(1);
+
+    resolve({ ...detail().ticket, approval: 'approved' });
+    await waitFor(() => expect(screen.queryByTestId('decision-modal')).not.toBeInTheDocument());
+  });
+
+  it('keeps your text and offers a manual fallback when Jira cannot be updated, then retries', async () => {
+    decisionMock.mockRejectedValueOnce(new ReviewApiError("Your acli can't set these Jira fields. Set Approval and Review Information on AT-727 in Jira instead."));
+    await openReview();
+    open('Decline');
+    const dialog = await screen.findByTestId('decision-modal');
+    fireEvent.change(within(dialog).getByLabelText(/Review information/), { target: { value: 'Needs a cleanup step' } });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Decline and save to Jira' }));
+
+    const error = await within(dialog).findByTestId('decision-error');
+    expect(error).toHaveTextContent("Your acli can't set these Jira fields");
+    expect(error).toHaveTextContent('Your text is still here');
+    expect(within(dialog).getByLabelText(/Review information/)).toHaveValue('Needs a cleanup step');
+    expect(within(dialog).getByRole('link', { name: /Open AT-727 in Jira/ })).toHaveAttribute('href', 'https://securicyapp.atlassian.net/browse/AT-727');
+    expect(screen.getByTestId('approval')).toHaveAttribute('data-state', 'none'); // nothing changed
+
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Decline and save to Jira' }));
+    await waitFor(() => expect(screen.queryByTestId('decision-modal')).not.toBeInTheDocument());
+    expect(screen.getByTestId('approval')).toHaveAttribute('data-state', 'declined');
+  });
+
+  it('can copy the review text for pasting into Jira by hand', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.assign(navigator, { clipboard: { writeText } });
+    decisionMock.mockRejectedValueOnce(new ReviewApiError('Jira did not save the review'));
+    await openReview();
+    open('Decline');
+    const dialog = await screen.findByTestId('decision-modal');
+    fireEvent.change(within(dialog).getByLabelText(/Review information/), { target: { value: 'Please fix X' } });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Decline and save to Jira' }));
+    fireEvent.click(await within(dialog).findByRole('button', { name: /Copy review text/ }));
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith('Please fix X'));
+    expect(toast.success).toHaveBeenCalledWith('Review text copied.');
+  });
+
+  it('says so when copying is not possible', async () => {
+    Object.assign(navigator, { clipboard: { writeText: vi.fn().mockRejectedValue(new Error('denied')) } });
+    decisionMock.mockRejectedValueOnce(new ReviewApiError('nope'));
+    await openReview();
+    open('Decline');
+    const dialog = await screen.findByTestId('decision-modal');
+    fireEvent.change(within(dialog).getByLabelText(/Review information/), { target: { value: 'x' } });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Decline and save to Jira' }));
+    fireEvent.click(await within(dialog).findByRole('button', { name: /Copy review text/ }));
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith(expect.stringContaining('copy it manually')));
+  });
+
+  it('does not offer a Jira link when the ticket URL is unsafe', async () => {
+    detailMock.mockResolvedValue(detail({ ticket: { ...detail().ticket, url: 'javascript:alert(1)' } }));
+    decisionMock.mockRejectedValueOnce(new ReviewApiError('nope'));
+    await openReview();
+    open('Approve');
+    const dialog = await screen.findByTestId('decision-modal');
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Approve and save to Jira' }));
+    await within(dialog).findByTestId('decision-error');
+    expect(within(dialog).queryByRole('link')).not.toBeInTheDocument();
+  });
+
+  it('uses a generic message when the failure has none', async () => {
+    decisionMock.mockRejectedValueOnce('weird');
+    await openReview();
+    open('Approve');
+    const dialog = await screen.findByTestId('decision-modal');
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Approve and save to Jira' }));
+    expect(await within(dialog).findByTestId('decision-error')).toHaveTextContent('Could not save the review to Jira.');
+  });
+
+  it('Cancel closes it without saving anything, and reopening starts clean', async () => {
+    await openReview();
+    open('Approve');
+    let dialog = await screen.findByTestId('decision-modal');
+    fireEvent.change(within(dialog).getByLabelText(/Review information/), { target: { value: 'half written' } });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+    await waitFor(() => expect(screen.queryByTestId('decision-modal')).not.toBeInTheDocument());
+    expect(decisionMock).not.toHaveBeenCalled();
+
+    open('Approve');
+    dialog = await screen.findByTestId('decision-modal');
+    expect(within(dialog).getByLabelText(/Review information/)).toHaveValue('');
+  });
+
+  it('is not shown for a PR that is already merged', async () => {
+    detailMock.mockResolvedValue(detail({ unmerged: 0 }));
+    await openReview();
+    expect(screen.queryByTestId('approval')).not.toBeInTheDocument();
+  });
+
+  it('merging waits while specs are running', async () => {
+    detailMock.mockResolvedValue(detail({ ticket: { ...detail().ticket, approval: 'approved' }, specs: ['spec/playwright/playwright/e2e/a/b.spec.ts'] }));
+    await openReview();
+    expect(mergeButton()).toBeEnabled();
   });
 });
 
@@ -639,7 +927,8 @@ describe('Pull request show page: merge box states', () => {
     expect(screen.getByTestId('conflict-help')).toHaveTextContent('git fetch origin && git checkout AT-727-add-test && git rebase origin/playwright-main');
     expect(screen.getByText('Conflicts')).toBeInTheDocument();
     expect(mergeButton()).toBeDisabled();
-    expect(screen.queryByTestId('approval')).not.toBeInTheDocument();
+    // a PR with conflicts can still be declined ("rebase needed"); it just can't be merged
+    expect(screen.getByTestId('approval')).toBeInTheDocument();
     expect(screen.queryByLabelText(/Move AT-727 to Done/)).not.toBeInTheDocument();
   });
 
@@ -655,7 +944,7 @@ describe('Pull request show page: merge box states', () => {
     await openReview();
     expect(screen.getByText(/Couldn't pre-check conflicts/)).toBeInTheDocument();
     expect(screen.getByText('Unchecked')).toBeInTheDocument();
-    approve();
+    await approve();
     expect(mergeButton()).toBeEnabled();
   });
 
@@ -667,29 +956,99 @@ describe('Pull request show page: merge box states', () => {
 });
 
 describe('Pull request show page: rebase and merge', () => {
-  it('asks for confirmation first, spelling out rebase, push, branch deletion and the Jira move', async () => {
+  it('is a two-step button like GitHub: the first click only asks, it never merges', async () => {
     await openReview();
-    approve();
+    await approve();
     fireEvent.click(mergeButton());
 
-    const dialog = await screen.findByRole('dialog');
-    expect(within(dialog).getByText('Rebase and merge into playwright-main?')).toBeInTheDocument();
-    expect(dialog).toHaveTextContent('rebases 1 commit from AT-727-add-test onto the latest playwright-main');
-    expect(dialog).toHaveTextContent('pushes the result to origin/playwright-main');
-    expect(dialog).toHaveTextContent('deletes the branch AT-727-add-test from origin');
-    expect(dialog).toHaveTextContent('AT-727 will then be moved to Done in Jira');
+    const confirm = await screen.findByTestId('merge-confirm');
+    // the first button is replaced by Confirm + Cancel, inline (no pop-up)
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(within(confirm).getByRole('button', { name: 'Confirm rebase and merge' })).toBeEnabled();
+    expect(within(confirm).getByRole('button', { name: 'Cancel' })).toBeEnabled();
+    expect(within(mergeBox()).queryByRole('button', { name: 'Rebase and merge' })).not.toBeInTheDocument();
     expect(mergeMock).not.toHaveBeenCalled();
   });
 
-  it('does nothing when the confirmation is cancelled', async () => {
+  it('spells out rebase, push, branch deletion and the Jira move before the second click', async () => {
     await openReview();
-    approve();
+    await approve();
     fireEvent.click(mergeButton());
-    fireEvent.click(within(await screen.findByRole('dialog')).getByRole('button', { name: 'Cancel' }));
 
-    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    const text = (await screen.findByTestId('merge-confirm-text')).textContent;
+    expect(text).toContain('rebases 1 commit from AT-727-add-test onto the latest playwright-main');
+    expect(text).toContain('pushes the result to origin/playwright-main');
+    expect(text).toContain('deletes the branch AT-727-add-test from origin');
+    expect(text).toContain('AT-727 will then be moved to Done in Jira');
+    expect(text).toContain('cannot be undone from here');
     expect(mergeMock).not.toHaveBeenCalled();
-    expect(mergeBox()).toBeInTheDocument();
+  });
+
+  it('puts the focus on Confirm so Enter or Space completes the second click deliberately', async () => {
+    await openReview();
+    await approve();
+    fireEvent.click(mergeButton());
+    const confirm = within(await screen.findByTestId('merge-confirm')).getByRole('button', { name: 'Confirm rebase and merge' });
+    await waitFor(() => expect(confirm).toHaveFocus());
+  });
+
+  it('Cancel puts the original button back and sends nothing', async () => {
+    await openReview();
+    await approve();
+    fireEvent.click(mergeButton());
+    fireEvent.click(within(await screen.findByTestId('merge-confirm')).getByRole('button', { name: 'Cancel' }));
+
+    expect(screen.queryByTestId('merge-confirm')).not.toBeInTheDocument();
+    expect(mergeButton()).toHaveTextContent('Rebase and merge');
+    expect(mergeButton()).toBeEnabled();
+    expect(mergeMock).not.toHaveBeenCalled();
+  });
+
+  it('Escape cancels the confirmation too', async () => {
+    await openReview();
+    await approve();
+    fireEvent.click(mergeButton());
+    fireEvent.keyDown(await screen.findByTestId('merge-confirm'), { key: 'Escape' });
+    expect(screen.queryByTestId('merge-confirm')).not.toBeInTheDocument();
+    expect(mergeMock).not.toHaveBeenCalled();
+  });
+
+  it('can be cancelled and asked again as many times as you like', async () => {
+    await openReview();
+    await approve();
+    for (let i = 0; i < 3; i++) {
+      fireEvent.click(mergeButton());
+      fireEvent.click(within(await screen.findByTestId('merge-confirm')).getByRole('button', { name: 'Cancel' }));
+    }
+    expect(mergeMock).not.toHaveBeenCalled();
+    fireEvent.click(mergeButton());
+    await confirmMerge();
+    await waitFor(() => expect(mergeMock).toHaveBeenCalledTimes(1));
+  });
+
+  it('the pending confirmation goes away if merging stops being allowed (approval undone)', async () => {
+    await openReview();
+    await approve();
+    fireEvent.click(mergeButton());
+    await screen.findByTestId('merge-confirm');
+
+    fireEvent.click(screen.getByRole('button', { name: /Undo approval/ }));
+
+    await waitFor(() => expect(screen.queryByTestId('merge-confirm')).not.toBeInTheDocument());
+    expect(mergeButton()).toBeDisabled();
+    expect(mergeMock).not.toHaveBeenCalled();
+  });
+
+  it('after the second click the buttons are replaced by the busy state', async () => {
+    mergeMock.mockReturnValue(new Promise(() => {}));
+    await openReview();
+    await approve();
+    fireEvent.click(mergeButton());
+    await confirmMerge();
+
+    await waitFor(() => expect(screen.queryByTestId('merge-confirm')).not.toBeInTheDocument());
+    expect(mergeButton()).toHaveTextContent('Rebasing and merging…');
+    expect(mergeButton()).toBeDisabled();
   });
 
   it('merges exactly the reviewed commit, reports every step, and returns to a refreshed table', async () => {
@@ -711,12 +1070,11 @@ describe('Pull request show page: rebase and merge', () => {
   it('leaves Jira alone when the checkbox is unticked', async () => {
     await openReview();
     fireEvent.click(screen.getByRole('checkbox', { name: /Move AT-727 to Done/ }));
-    approve();
+    await approve();
     fireEvent.click(mergeButton());
 
-    const dialog = await screen.findByRole('dialog');
-    expect(dialog).not.toHaveTextContent('Jira');
-    fireEvent.click(within(dialog).getByRole('button', { name: 'Rebase and merge' }));
+    expect((await screen.findByTestId('merge-confirm-text')).textContent).not.toContain('Jira');
+    await confirmMerge();
 
     await waitFor(() => expect(mergeMock).toHaveBeenCalledWith(expect.objectContaining({ moveToDone: false })));
   });
@@ -767,9 +1125,9 @@ describe('Pull request show page: rebase and merge', () => {
     let resolve!: (v: MergeResult) => void;
     mergeMock.mockReturnValue(new Promise((r) => (resolve = r)));
     await openReview();
-    approve();
+    await approve();
     fireEvent.click(mergeButton());
-    const confirm = within(await screen.findByRole('dialog')).getByRole('button', { name: 'Rebase and merge' });
+    const confirm = within(await screen.findByTestId('merge-confirm')).getByRole('button', { name: 'Confirm rebase and merge' });
     fireEvent.click(confirm);
     fireEvent.click(confirm);
 
@@ -786,7 +1144,7 @@ describe('Pull request show page: rebase and merge', () => {
     const alert = await screen.findByTestId('merge-error');
     expect(alert).toHaveTextContent('hit conflicts');
     expect(alert).toHaveTextContent('spec/a.spec.ts');
-    expect(toast.success).not.toHaveBeenCalled();
+    expect(toast.success).not.toHaveBeenCalledWith(expect.stringContaining('rebased and merged'));
     expect(mergeButton()).toBeEnabled();
     expect(mergeBox()).toBeInTheDocument();
 

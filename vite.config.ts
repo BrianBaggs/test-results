@@ -28,6 +28,8 @@ export default defineConfig(({ mode }) => {
       // Review tab: runs local git (and the Atlassian CLI) from the dev server.
       reviewPlugin({
         repoPath: env.REVIEW_REPO_PATH,
+        serverRepoPath: env.REVIEW_SERVER_REPO_PATH,
+        testServerPort: Number(env.REVIEW_TEST_SERVER_PORT) > 0 ? Number(env.REVIEW_TEST_SERVER_PORT) : undefined,
         jira: {
           reviewStatus: env.JIRA_REVIEW_STATUS,
           doneStatus: env.JIRA_DONE_STATUS,

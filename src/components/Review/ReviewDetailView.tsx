@@ -4,29 +4,37 @@ import {
   CheckIcon,
   ChevronsDownUpIcon,
   ChevronsUpDownIcon,
+  CheckCircleIcon,
+  LoaderIcon,
+  XCircleIcon,
   ExternalLinkIcon,
   FileDiffIcon,
   GitBranchIcon,
   GitCommitHorizontalIcon,
   GitMergeIcon,
   GitPullRequestIcon,
-  LoaderIcon,
   RefreshCwIcon,
   ShieldCheckIcon,
+  ThumbsDownIcon,
 } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 import { defaultDiffMode, plural, safeHref, timeAgo } from '@/utils/reviewFormat';
 import type { DiffMode } from '@/utils/reviewFormat';
-import { fetchReviewDetail } from '@/utils/reviewApi';
-import { readApproved, readViewed, writeApproved, writeViewed } from '@/utils/reviewStorage';
+import { fetchReviewDetail, submitReviewDecision } from '@/utils/reviewApi';
+import { readViewed, writeViewed } from '@/utils/reviewStorage';
 import { FileDiff } from './DiffView';
 import { ErrorBanner, Skeleton } from './Feedback';
 import { MergeBox } from './MergeBox';
-import type { ReviewBranch, ReviewDetail, ReviewFile } from '@/types/review';
+import { ReviewDecisionModal } from './ReviewDecisionModal';
+import { SpecRunModal } from './SpecRunModal';
+import { SpecsPanel } from './SpecsPanel';
+import { useSpecRun, useTestServer } from './useSpecRun';
+import type { ReviewBranch, ReviewDetail, ReviewFile, ReviewIssue } from '@/types/review';
+import { toast } from 'sonner';
 
-type DetailTab = 'conversation' | 'commits' | 'files';
+type DetailTab = 'conversation' | 'commits' | 'files' | 'specs';
 
 const DIFF_MODE_KEY = 'review-diff-mode';
 const MANY_FILES = 15;
@@ -81,8 +89,7 @@ const Stat: React.FC<{ label: string; value: React.ReactNode; testId: string }> 
   </div>
 );
 
-const Sidebar: React.FC<{ branch: ReviewBranch; detail: ReviewDetail }> = ({ branch, detail }) => {
-  const { ticket } = detail;
+const Sidebar: React.FC<{ branch: ReviewBranch; detail: ReviewDetail; ticket: ReviewIssue }> = ({ branch, detail, ticket }) => {
   const ticketHref = safeHref(ticket.url);
   const rows: Array<[string, React.ReactNode]> = [
     [
@@ -96,7 +103,9 @@ const Sidebar: React.FC<{ branch: ReviewBranch; detail: ReviewDetail }> = ({ bra
       ),
     ],
     ['Jira status', ticket.status],
+    ['Approval', ticket.approval === 'approved' ? 'Approved' : ticket.approval === 'declined' ? 'Declined' : '—'],
     ['Assignee', ticket.assignee ?? '—'],
+    ['Reviewer', ticket.reviewers?.length ? ticket.reviewers.join(', ') : '—'],
     ['Last pushed by', branch.author],
     ['Base', <code key="b" className="rounded bg-muted px-1.5 py-0.5 text-xs">{detail.baseBranch}</code>],
     ['Compare', <code key="c" className="rounded bg-muted px-1.5 py-0.5 text-xs break-all">{detail.branch}</code>],
@@ -123,13 +132,39 @@ const ReviewBody: React.FC<{
   onMerged: () => void;
   onReload: () => void;
   onBusyChange: (busy: boolean) => void;
-}> = ({ detail, branch, onMerged, onReload, onBusyChange }) => {
+  onSpecBusyChange: (busy: boolean) => void;
+}> = ({ detail, branch, onMerged, onReload, onBusyChange, onSpecBusyChange }) => {
   const [tab, setTab] = useState<DetailTab>('conversation');
   const [mode, setModeState] = useState<DiffMode>(readDiffMode);
-  const [approved, setApprovedState] = useState(() => readApproved(detail.branch, detail.sha));
+  // The ticket as Jira has it: its Approval checkboxes are the single source of truth for "approved".
+  const [ticket, setTicket] = useState<ReviewIssue>(detail.ticket);
+  const [deciding, setDeciding] = useState<'approved' | 'declined' | null>(null);
+  const [clearing, setClearing] = useState(false);
   const [viewed, setViewedState] = useState<string[]>(() => readViewed(detail.branch, detail.sha));
   const [openOverride, setOpenOverride] = useState<Record<string, boolean>>({});
   const mergeRef = useRef<HTMLDivElement>(null);
+  const [modalOpen, setModalOpen] = useState(false);
+  const hasSpecs = detail.specs.length > 0;
+  const hasSupportOnly = !hasSpecs && (detail.supportFiles?.length ?? 0) > 0;
+  // Only watch the test server when there is something to run against it.
+  const server = useTestServer(8000, hasSpecs);
+  const run = useSpecRun(detail.branch, detail.sha, detail.specs);
+
+  const startRun = async (specs: string[] | 'all') => {
+    if (await run.start(specs)) setModalOpen(true);
+  };
+
+  useEffect(() => {
+    onSpecBusyChange(run.running);
+    if (!run.running) return;
+    // Leaving mid-run would lose the live view; the run itself continues on the server.
+    const warn = (e: BeforeUnloadEvent) => {
+      e.preventDefault();
+      e.returnValue = '';
+    };
+    window.addEventListener('beforeunload', warn);
+    return () => window.removeEventListener('beforeunload', warn);
+  }, [run.running, onSpecBusyChange]);
 
   const files = detail.files;
   const viewedSet = useMemo(() => new Set(viewed), [viewed]);
@@ -144,9 +179,18 @@ const ReviewBody: React.FC<{
     }
   };
 
-  const setApproved = (value: boolean) => {
-    setApprovedState(value);
-    writeApproved(detail.branch, detail.sha, value);
+  const approved = ticket.approval === 'approved';
+  const clearDecision = async () => {
+    if (clearing) return;
+    setClearing(true);
+    try {
+      setTicket(await submitReviewDecision({ branch: detail.branch, expectedSha: detail.sha, decision: 'none' }));
+      toast.success(`${ticket.key}: decision cleared in Jira.`);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Could not clear the decision in Jira.');
+    } finally {
+      setClearing(false);
+    }
   };
 
   const setViewed = (f: ReviewFile, value: boolean) => {
@@ -175,6 +219,11 @@ const ReviewBody: React.FC<{
     ['conversation', 'Conversation'],
     ['commits', `Commits (${detail.commits.length})`],
     ['files', `Files changed (${files.length})`],
+    ...(hasSpecs
+      ? ([['specs', `Specs (${detail.specs.length})`]] as Array<[DetailTab, string]>)
+      : hasSupportOnly
+        ? ([['specs', `Support files (${detail.supportFiles.length})`]] as Array<[DetailTab, string]>)
+        : []),
   ];
   const progress = files.length ? Math.round((viewed.length / files.length) * 100) : 0;
 
@@ -188,11 +237,14 @@ const ReviewBody: React.FC<{
             aria-selected={tab === id}
             onClick={() => setTab(id)}
             className={cn(
-              '-mb-px border-b-2 px-3 py-2 text-sm font-medium whitespace-nowrap transition-colors focus-visible:ring-1 focus-visible:ring-ring focus-visible:outline-none',
+              '-mb-px flex items-center gap-2 border-b-2 px-3 py-2 text-sm font-medium whitespace-nowrap transition-colors focus-visible:ring-1 focus-visible:ring-ring focus-visible:outline-none',
               tab === id ? 'border-primary text-foreground' : 'border-transparent text-muted-foreground hover:text-foreground',
             )}
           >
             {label}
+            {id === 'specs' && run.running && <LoaderIcon className="size-3.5 animate-spin text-primary" aria-label="Specs running" />}
+            {id === 'specs' && !run.running && run.job?.status === 'passed' && <CheckCircleIcon className="size-3.5 text-success" aria-label="Specs passed" />}
+            {id === 'specs' && !run.running && (run.job?.status === 'failed' || run.job?.status === 'error') && <XCircleIcon className="size-3.5 text-destructive" aria-label="Specs failed" />}
           </button>
         ))}
         <span className="ml-auto shrink-0 self-center pr-1 font-mono text-xs">
@@ -237,18 +289,27 @@ const ReviewBody: React.FC<{
 
           <MergeBox
             ref={mergeRef}
-            detail={detail}
-            approved={approved}
-            onApprovedChange={setApproved}
+            detail={{ ...detail, ticket }}
+            ticket={ticket}
+            onDecide={setDeciding}
+            onClear={() => void clearDecision()}
+            clearing={clearing}
+            specsRunning={run.running}
             onMerged={onMerged}
             onReload={onReload}
             onBusyChange={onBusyChange}
           />
         </div>
-        <Sidebar branch={branch} detail={detail} />
+        <Sidebar branch={branch} detail={detail} ticket={ticket} />
       </div>
 
       {tab === 'commits' && <CommitList detail={detail} />}
+
+      {tab === 'specs' && <SpecsPanel detail={detail} run={run} server={server} onRun={(specs) => void startRun(specs)} onOpenOutput={() => setModalOpen(true)} />}
+
+      <ReviewDecisionModal open={deciding !== null} onOpenChange={(o) => !o && setDeciding(null)} decision={deciding ?? 'approved'} detail={detail} ticket={ticket} onDecided={setTicket} />
+
+      <SpecRunModal open={modalOpen} onOpenChange={setModalOpen} run={run} ticketKey={detail.ticket.key} testServerUp={server.up} onRerun={(specs) => void startRun(specs)} />
 
       {tab === 'files' && (
         <div className="space-y-4">
@@ -330,18 +391,24 @@ const ReviewBody: React.FC<{
           )}
 
           <div
-            className="sticky bottom-4 z-10 flex flex-col gap-3 rounded-lg border border-border bg-card p-3 shadow-lg sm:flex-row sm:items-center sm:justify-between"
+            className="sticky bottom-0 z-10 -mx-1 flex flex-col gap-3 rounded-t-lg border border-b-0 border-border bg-card px-4 py-3 shadow-[0_-6px_16px_-8px_rgba(0,0,0,0.25)] sm:flex-row sm:items-center sm:justify-between"
             data-testid="review-footer"
           >
             <p className="text-sm text-muted-foreground">
-              {viewed.length} of {plural(files.length, 'file')} viewed{approved ? ' · you approved these changes' : ''}
+              {viewed.length} of {plural(files.length, 'file')} viewed{approved ? ' · approved in Jira' : ticket.approval === 'declined' ? ' · declined in Jira' : ''}
             </p>
             <div className="flex flex-wrap gap-2">
-              {!approved && detail.unmerged > 0 && detail.canRebase !== false && (
-                <Button variant="outline" onClick={() => setApproved(true)}>
-                  <ShieldCheckIcon />
-                  Approve changes
-                </Button>
+              {ticket.approval === null && detail.unmerged > 0 && detail.canRebase !== false && (
+                <>
+                  <Button variant="outline" onClick={() => setDeciding('declined')} className="text-destructive">
+                    <ThumbsDownIcon />
+                    Decline…
+                  </Button>
+                  <Button variant="outline" onClick={() => setDeciding('approved')}>
+                    <ShieldCheckIcon />
+                    Approve…
+                  </Button>
+                </>
               )}
               <Button variant={approved ? 'default' : 'outline'} onClick={goToMerge}>
                 <GitMergeIcon />
@@ -359,14 +426,24 @@ const ReviewBody: React.FC<{
 // Loader + header
 // ---------------------------------------------------------------------------
 
-const DetailSkeleton: React.FC = () => (
-  <div role="status" aria-live="polite" className="space-y-4">
-    <p className="flex items-center gap-2 text-sm text-muted-foreground">
-      <LoaderIcon className="size-4 animate-spin" /> Loading changes…
-    </p>
-    <Skeleton className="h-20 w-full" />
-    <Skeleton className="h-9 w-72 max-w-full" />
-    <Skeleton className="h-48 w-full" />
+/**
+ * Shown while a pull request is being pulled in (Jira + git diff can take a few
+ * seconds). A spinning ring and what's happening, so it never looks broken.
+ */
+const DetailSkeleton: React.FC<{ ticketKey?: string }> = ({ ticketKey }) => (
+  <div role="status" aria-live="polite" className="space-y-6" data-testid="detail-loading">
+    <div className="flex flex-col items-center gap-3 rounded-xl border border-border/60 bg-card px-6 py-10 text-center">
+      <span aria-hidden="true" className="size-12 animate-spin rounded-full border-4 border-primary/20 border-t-primary" />
+      <p className="text-base font-semibold">Loading pull request…</p>
+      <p className="max-w-md text-sm text-muted-foreground">
+        Reading {ticketKey ?? 'the ticket'} from Jira and comparing its branch with playwright-main. This usually takes a few seconds.
+      </p>
+    </div>
+    <div aria-hidden="true" className="space-y-4 opacity-60">
+      <Skeleton className="h-20 w-full" />
+      <Skeleton className="h-9 w-72 max-w-full" />
+      <Skeleton className="h-32 w-full" />
+    </div>
   </div>
 );
 
@@ -381,7 +458,9 @@ export const ReviewDetailView: React.FC<{
   const [detail, setDetail] = useState<ReviewDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
-  const [busy, setBusy] = useState(false);
+  const [mergeBusy, setMergeBusy] = useState(false);
+  const [specBusy, setSpecBusy] = useState(false);
+  const busy = mergeBusy || specBusy;
 
   useEffect(() => {
     let cancelled = false;
@@ -465,9 +544,9 @@ export const ReviewDetailView: React.FC<{
         </ErrorBanner>
       )}
 
-      {!detail && !error && <DetailSkeleton />}
+      {!detail && !error && <DetailSkeleton ticketKey={key} />}
 
-      {detail && <ReviewBody key={`${detail.branch}@${detail.sha}`} detail={detail} branch={branch} onMerged={onMerged} onReload={reload} onBusyChange={setBusy} />}
+      {detail && <ReviewBody key={`${detail.branch}@${detail.sha}`} detail={detail} branch={branch} onMerged={onMerged} onReload={reload} onBusyChange={setMergeBusy} onSpecBusyChange={setSpecBusy} />}
     </div>
   );
 };

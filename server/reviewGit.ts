@@ -3,7 +3,12 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { existsSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { delimiter, join } from 'node:path';
-import { AcliError } from './acli.ts';
+import { AcliError, MAX_REVIEW_INFO_CHARS } from './acli.ts';
+import { redactSecrets, stripUrlCredentials } from './redact.ts';
+import { ReviewError } from './reviewError.ts';
+import { createSpecRunService } from './specRun.ts';
+import { planOverlay } from './serverOverlay.ts';
+import { isRunnableSpecPath } from './specRunner.ts';
 import type { AcliErrorKind } from './acli.ts';
 import { createGhChecker } from './ghStatus.ts';
 import type { GhChecker, GhStatus } from './ghStatus.ts';
@@ -32,6 +37,10 @@ export interface ReviewConfig {
   remote: string;
   /** Jira project key; also the branch-name prefix (e.g. `AT-727-...`). */
   projectKey: string;
+  /** The Rails test server's checkout (defaults to repoPath). */
+  serverRepoPath?: string;
+  /** Port the QA test server listens on (default 5017). */
+  testServerPort?: number;
 }
 
 export interface BranchInfo {
@@ -55,7 +64,7 @@ export interface BranchInfo {
   unmerged: number;
 }
 
-export interface ReviewTicket {
+interface ReviewTicket {
   key: string;
   summary: string;
   status: string;
@@ -98,7 +107,7 @@ export interface Requirement {
   url?: string;
 }
 
-export interface ReviewCommit {
+interface ReviewCommit {
   sha: string;
   author: string;
   date: string;
@@ -133,6 +142,12 @@ export interface ReviewDetail {
   conflicts: string[];
   commits: ReviewCommit[];
   files: ReviewFile[];
+  /** Playwright specs this PR adds or changes — the ones that can be run. */
+  specs: string[];
+  /** Changed files that run inside the test server (not copied by a spec run). */
+  serverCodeChanged: string[];
+  /** Other Playwright files this PR changes (helpers, page objects, fixtures, cassettes…): nothing to run, but worth knowing. */
+  supportFiles: string[];
   totals: { additions: number; deletions: number };
   branchUrl: string | null;
 }
@@ -148,17 +163,7 @@ export interface MergeResult {
   warning: string | null;
 }
 
-/** An error with an HTTP status the plugin can pass straight through. */
-export class ReviewError extends Error {
-  status: number;
-  details?: string[];
-  constructor(status: number, message: string, details?: string[]) {
-    super(message);
-    this.name = 'ReviewError';
-    this.status = status;
-    this.details = details;
-  }
-}
+export { ReviewError } from './reviewError.ts';
 
 // ---------------------------------------------------------------------------
 // git plumbing
@@ -202,7 +207,7 @@ function runGit(args: string[], cwd: string, timeoutMs = 60_000): Promise<ExecRe
 }
 
 function firstLines(text: string, n = 6): string {
-  return text.trim().split('\n').slice(0, n).join('\n') || 'unknown error';
+  return redactSecrets(text.trim().split('\n').slice(0, n).join('\n')) || 'unknown error';
 }
 
 // ---------------------------------------------------------------------------
@@ -215,11 +220,20 @@ export function expandHome(p: string): string {
   return p;
 }
 
-/** `git@github.com:o/r.git` / `https://github.com/o/r.git` -> `https://github.com/o/r` */
+/**
+ * The web page for a remote, for "View on GitHub" links. Understands scp-style
+ * (`git@host:o/r.git`), `ssh://git@host[:port]/o/r.git` and `https://host[:port]/o/r.git`.
+ * Any credentials embedded in the URL are dropped, never copied into the link.
+ */
 export function toWebUrl(remoteUrl: string | null): string | null {
   if (!remoteUrl) return null;
-  const m = /^(?:git@|ssh:\/\/git@|https?:\/\/)([^/:]+)[/:](.+?)(?:\.git)?\/?$/.exec(remoteUrl.trim());
-  return m ? `https://${m[1]}/${m[2]}` : null;
+  const url = stripUrlCredentials(remoteUrl.trim());
+  const scp = /^git@([^:/]+):(.+?)(?:\.git)?\/?$/.exec(url);
+  if (scp) return `https://${scp[1]}/${scp[2]}`;
+  const ssh = /^ssh:\/\/git@([^/:]+)(?::\d+)?\/(.+?)(?:\.git)?\/?$/.exec(url);
+  if (ssh) return `https://${ssh[1]}/${ssh[2]}`;
+  const http = /^(https?):\/\/([^/]+)\/(.+?)(?:\.git)?\/?$/.exec(url);
+  return http ? `${http[1]}://${http[2]}/${http[3]}` : null;
 }
 
 /**
@@ -377,6 +391,8 @@ export interface ReviewServiceDeps {
   findExecutable?: (bin: string) => boolean;
   /** Injectable for tests: the `gh auth status` checker. */
   gh?: GhChecker;
+  /** Injectable for tests: probe, spawn, env, kill grace for spec runs. */
+  specRun?: Partial<Pick<Parameters<typeof createSpecRunService>[0], 'probe' | 'spawnImpl' | 'env' | 'killGraceMs' | 'keepJobs'>>;
 }
 
 async function mapLimit<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
@@ -426,7 +442,8 @@ export function createReviewService(config: ReviewConfig, deps: ReviewServiceDep
 
   async function remoteUrl(): Promise<string | null> {
     const r = await git(['remote', 'get-url', remote]);
-    return r.code === 0 ? r.stdout.trim() : null;
+    // A remote can carry a token in its URL's userinfo part; never expose it.
+    return r.code === 0 ? stripUrlCredentials(r.stdout.trim()) : null;
   }
 
   const isInstalled = deps.findExecutable ?? ((bin: string) => findOnPath(bin));
@@ -642,6 +659,10 @@ export function createReviewService(config: ReviewConfig, deps: ReviewServiceDep
       });
 
     const files = parseDiff(diff);
+    const changed = files.map((f) => ({ path: f.path, status: f.status }));
+    const specs = changed.filter((f) => f.status !== 'deleted' && isRunnableSpecPath(f.path)).map((f) => f.path);
+    const serverCodeChanged = planOverlay(changed).serverCodeChanged;
+    const supportFiles = changed.filter((f) => f.status !== 'deleted' && f.path.startsWith('spec/') && !isRunnableSpecPath(f.path)).map((f) => f.path);
 
     let canRebase: boolean | null = null;
     let conflicts: string[] = [];
@@ -666,6 +687,9 @@ export function createReviewService(config: ReviewConfig, deps: ReviewServiceDep
       conflicts,
       commits,
       files,
+      specs,
+      serverCodeChanged,
+      supportFiles,
       totals: {
         additions: files.reduce((n, f) => n + f.additions, 0),
         deletions: files.reduce((n, f) => n + f.deletions, 0),
@@ -681,10 +705,19 @@ export function createReviewService(config: ReviewConfig, deps: ReviewServiceDep
       if (typeof opts.expectedSha !== 'string' || !/^[0-9a-f]{7,64}$/i.test(opts.expectedSha)) {
         throw new ReviewError(400, 'expectedSha is required so the merge only applies what was reviewed.');
       }
+      if (specRun.busy()) throw new ReviewError(409, 'Specs are running. Wait for them to finish (or cancel them) before merging.');
       await assertReady();
       // The ticket must be in the Review column right now — checked before
-      // anything is fetched, rebased or pushed.
-      await requireReviewTicket(branch);
+      // anything is fetched, rebased or pushed — and approved in Jira.
+      const reviewTicket = await requireReviewTicket(branch);
+      if (reviewTicket.approval !== 'approved') {
+        throw new ReviewError(
+          409,
+          reviewTicket.approval === 'declined'
+            ? `${reviewTicket.key} was declined in review, so it can't be merged. Approve it first if that has changed.`
+            : `${reviewTicket.key} hasn't been approved yet. Approve it (this ticks Approved in Jira) before merging.`,
+        );
+      }
       await fetchRemote();
       await requireBase();
 
@@ -768,7 +801,74 @@ export function createReviewService(config: ReviewConfig, deps: ReviewServiceDep
     });
   }
 
-  return { status, list, detail, merge, ghStatus };
+  /** Approve or decline the PR: ticks Approved/Declined on the AT ticket and records the review notes. */
+  async function submitReview(opts: { branch?: unknown; expectedSha?: unknown; decision?: unknown; info?: unknown }): Promise<JiraIssue> {
+    assertReviewable(opts.branch);
+    const branch = opts.branch;
+    if (typeof opts.expectedSha !== 'string' || !/^[0-9a-f]{7,64}$/i.test(opts.expectedSha)) {
+      throw new ReviewError(400, 'expectedSha is required so the decision applies to the commits you reviewed.');
+    }
+    if (opts.decision !== 'approved' && opts.decision !== 'declined' && opts.decision !== 'none') {
+      throw new ReviewError(400, 'decision must be "approved", "declined" or "none".');
+    }
+    if (opts.info !== undefined && typeof opts.info !== 'string') throw new ReviewError(400, 'Review information must be text.');
+    const info = typeof opts.info === 'string' ? opts.info.trim() : undefined;
+    if (info !== undefined && info.length > MAX_REVIEW_INFO_CHARS) {
+      throw new ReviewError(400, `Review information is limited to ${MAX_REVIEW_INFO_CHARS} characters (it is ${info.length}).`);
+    }
+    if (opts.decision === 'declined' && !info) throw new ReviewError(400, 'Say why you are declining: add some review information.');
+
+    await assertReady();
+    const sha = await revParse(`${remote}/${branch}`);
+    if (!sha) throw new ReviewError(404, `Branch "${branch}" was not found on ${remote}. Refresh and try again.`);
+    if (!sha.startsWith(opts.expectedSha.toLowerCase())) {
+      throw new ReviewError(409, `"${branch}" changed since you opened it. Reload the pull request and review the new commits before deciding.`);
+    }
+    const ticket = await requireReviewTicket(branch);
+    try {
+      return await jiraClient.submitReview(ticket.key, opts.decision, info);
+    } catch (err) {
+      if (err instanceof AcliError && err.kind !== 'blocked') throw new ReviewError(err.kind === 'failed' ? 502 : 503, err.message);
+      throw err;
+    }
+  }
+
+  const specRun = createSpecRunService({
+    repoPath,
+    serverRoot: config.serverRepoPath ?? repoPath,
+    testServerPort: config.testServerPort,
+    assertReviewable,
+    assertReady,
+    requireReviewTicket,
+    fetchRemote,
+    resolveBranch: (branch) => revParse(`${remote}/${branch}`),
+    changedFiles: async (branch) => {
+      const diff = await mustGit(['diff', '-M', '--no-color', '--no-ext-diff', '--no-textconv', `${baseRef}...${remote}/${branch}`], repoPath, 'git diff');
+      return parseDiff(diff).map((f) => ({ path: f.path, status: f.status }));
+    },
+    addWorktree: async (branch, dir) => {
+      await mustGit(['worktree', 'add', '--detach', '--quiet', dir, `${remote}/${branch}`], repoPath, 'Creating a temporary checkout of the PR');
+    },
+    removeWorktree: async (dir) => {
+      await git(['worktree', 'remove', '--force', dir]);
+      await git(['worktree', 'prune']);
+    },
+    ...deps.specRun,
+  });
+
+  return {
+    status,
+    list,
+    detail,
+    merge,
+    ghStatus,
+    submitReview,
+    testServer: specRun.testServer,
+    startSpecRun: specRun.start,
+    getSpecRun: specRun.get,
+    cancelSpecRun: specRun.cancel,
+    shutdown: specRun.shutdown,
+  };
 }
 
 export type ReviewService = ReturnType<typeof createReviewService>;

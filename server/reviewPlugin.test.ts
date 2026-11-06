@@ -4,6 +4,8 @@ import { MAX_BODY_BYTES, checkRequestOrigin, createReviewHandler, exposedServerH
 import { ReviewError } from './reviewGit';
 import { GitGuardError } from './gitGuard';
 import { AcliError } from './acli';
+import { OverlayError } from './serverOverlay';
+import { SpecGuardError } from './specRunner';
 import type { ReviewService } from './reviewGit';
 
 function req(opts: { method?: string; url?: string; host?: string; origin?: string; contentType?: string; body?: string; site?: string }): IncomingMessage {
@@ -47,6 +49,12 @@ function service(overrides: Partial<ReviewService> = {}): ReviewService {
   return {
     status: vi.fn().mockResolvedValue({ ok: true }),
     ghStatus: vi.fn().mockResolvedValue({ state: 'ready', account: 'BrianBaggs' }),
+    testServer: vi.fn().mockResolvedValue({ up: true, port: 5017 }),
+    startSpecRun: vi.fn().mockResolvedValue({ id: 'job-1' }),
+    getSpecRun: vi.fn().mockReturnValue({ id: 'job-1', status: 'running' }),
+    cancelSpecRun: vi.fn().mockResolvedValue({ id: 'job-1', status: 'cancelled' }),
+    submitReview: vi.fn().mockResolvedValue({ key: 'AT-1', approval: 'approved' }),
+    shutdown: vi.fn(),
     list: vi.fn().mockResolvedValue({ tickets: [] }),
     detail: vi.fn().mockResolvedValue({ branch: 'AT-1-x' }),
     merge: vi.fn().mockResolvedValue({ merged: 1 }),
@@ -229,6 +237,172 @@ describe('reviewPlugin', () => {
 
   it('rejects an unsafe Done status at startup', () => {
     expect(() => mount({ jira: { doneStatus: 'Cancelled' } })).toThrow(/Done or Completed/);
+  });
+});
+
+describe('decision route', () => {
+  const post = (body: unknown, extra: Partial<Parameters<typeof req>[0]> = {}) => req({ method: 'POST', url: '/decision', contentType: 'application/json', body: JSON.stringify(body), ...extra });
+
+  it('passes only branch, expectedSha, decision and info to the service', async () => {
+    const svc = service();
+    const r = res();
+    await createReviewHandler(svc)(post({ branch: 'AT-1-x', expectedSha: 'abc1234', decision: 'declined', info: 'why', issues: ['APP-1'], customfield_10650: [{ id: '1' }] }), r.raw);
+    expect(r.out.statusCode).toBe(200);
+    expect(svc.submitReview).toHaveBeenCalledExactlyOnceWith({ branch: 'AT-1-x', expectedSha: 'abc1234', decision: 'declined', info: 'why' });
+    expect(r.json().data).toEqual({ key: 'AT-1', approval: 'approved' });
+  });
+
+  it('refuses cross-site, non-JSON, bad and oversized bodies before touching the service', async () => {
+    const svc = service();
+    for (const [request, status] of [
+      [post({}, { site: 'cross-site' }), 403],
+      [post({}, { origin: 'https://evil.example' }), 403],
+      [req({ method: 'POST', url: '/decision', contentType: 'text/plain', body: '{}' }), 403],
+      [req({ method: 'POST', url: '/decision', contentType: 'application/json', body: 'nope' }), 400],
+      [post({ pad: 'x'.repeat(MAX_BODY_BYTES + 10) }), 413],
+    ] as const) {
+      const r = res();
+      await createReviewHandler(svc)(request, r.raw);
+      expect(r.out.statusCode).toBe(status);
+    }
+    expect(svc.submitReview).not.toHaveBeenCalled();
+  });
+
+  it('maps service errors and the wrong verb', async () => {
+    const r = res();
+    await createReviewHandler(service({ submitReview: vi.fn().mockRejectedValue(new ReviewError(400, 'Say why you are declining')) }))(post({ branch: 'AT-1-x' }), r.raw);
+    expect(r.out.statusCode).toBe(400);
+    const g = res();
+    await createReviewHandler(service())(req({ url: '/decision' }), g.raw);
+    expect(g.out.statusCode).toBe(405);
+  });
+});
+
+describe('spec run routes', () => {
+  const post = (url: string, body: unknown, extra: Partial<Parameters<typeof req>[0]> = {}) =>
+    req({ method: 'POST', url, contentType: 'application/json', body: JSON.stringify(body), ...extra });
+
+  it('GET /tests/status reports the test server', async () => {
+    const svc = service();
+    const r = res();
+    await createReviewHandler(svc)(req({ url: '/tests/status' }), r.raw);
+    expect(r.out.statusCode).toBe(200);
+    expect(r.json().data).toEqual({ up: true, port: 5017 });
+  });
+
+  it('POST /tests/run passes only branch, expectedSha and specs to the service', async () => {
+    const svc = service();
+    const r = res();
+    await createReviewHandler(svc)(post('/tests/run', { branch: 'AT-1-x', expectedSha: 'abc1234', specs: ['a.spec.ts'], cwd: '/etc', command: 'rm -rf /', env: { A: 1 } }), r.raw);
+    expect(r.out.statusCode).toBe(200);
+    expect(r.json().data).toEqual({ id: 'job-1' });
+    expect(svc.startSpecRun).toHaveBeenCalledExactlyOnceWith({ branch: 'AT-1-x', expectedSha: 'abc1234', specs: ['a.spec.ts'] });
+  });
+
+  it('GET /tests/job passes the id and the output offset', async () => {
+    const svc = service();
+    const r = res();
+    await createReviewHandler(svc)(req({ url: '/tests/job?id=job-1&since=120' }), r.raw);
+    expect(svc.getSpecRun).toHaveBeenCalledWith('job-1', 120);
+    expect(r.json().data.status).toBe('running');
+    const r2 = res();
+    await createReviewHandler(svc)(req({ url: '/tests/job' }), r2.raw);
+    expect(svc.getSpecRun).toHaveBeenLastCalledWith(null, 0);
+  });
+
+  it('POST /tests/cancel passes only the id', async () => {
+    const svc = service();
+    const r = res();
+    await createReviewHandler(svc)(post('/tests/cancel', { id: 'job-1', extra: 1 }), r.raw);
+    expect(svc.cancelSpecRun).toHaveBeenCalledExactlyOnceWith('job-1');
+    expect(r.json().data.status).toBe('cancelled');
+  });
+
+  it.each(['/tests/run', '/tests/cancel'])('%s refuses cross-site, non-JSON, bad and oversized bodies before touching the service', async (url) => {
+    const svc = service();
+    for (const [request, status] of [
+      [post(url, {}, { site: 'cross-site' }), 403],
+      [post(url, {}, { origin: 'https://evil.example' }), 403],
+      [req({ method: 'POST', url, contentType: 'text/plain', body: '{}' }), 403],
+      [req({ method: 'POST', url, contentType: 'application/json', body: 'not json' }), 400],
+      [req({ method: 'POST', url, contentType: 'application/json', body: '[]' }), 400],
+      [post(url, { pad: 'x'.repeat(MAX_BODY_BYTES + 10) }), 413],
+    ] as const) {
+      const r = res();
+      await createReviewHandler(svc)(request, r.raw);
+      expect(r.out.statusCode, `${url} ${status}`).toBe(status);
+    }
+    expect(svc.startSpecRun).not.toHaveBeenCalled();
+    expect(svc.cancelSpecRun).not.toHaveBeenCalled();
+  });
+
+  it('refuses cross-site reads of the run output', async () => {
+    const svc = service();
+    const r = res();
+    await createReviewHandler(svc)(req({ url: '/tests/job?id=job-1', site: 'cross-site' }), r.raw);
+    expect(r.out.statusCode).toBe(403);
+    expect(svc.getSpecRun).not.toHaveBeenCalled();
+  });
+
+  it('maps service errors to clear statuses', async () => {
+    for (const [error, status] of [
+      [new ReviewError(409, "The test server isn't running on 127.0.0.1:5017. Start it with `yarn test:server` in securicy-app, then try again."), 409],
+      [new ReviewError(400, 'not in pr', ['x.spec.ts']), 400],
+      [new SpecGuardError('nope'), 403],
+      [new OverlayError('Refusing to copy'), 409],
+    ] as const) {
+      const r = res();
+      await createReviewHandler(service({ startSpecRun: vi.fn().mockRejectedValue(error) }))(post('/tests/run', { branch: 'AT-1-x' }), r.raw);
+      expect(r.out.statusCode).toBe(status);
+      expect(r.json().success).toBe(false);
+    }
+    const r = res();
+    await createReviewHandler(service({ startSpecRun: vi.fn().mockRejectedValue(new ReviewError(409, "isn't running"))}))(post('/tests/run', {}), r.raw);
+    expect(r.json().error).toBe("isn't running");
+  });
+
+  it('answers 405 for the wrong verb on every spec route', async () => {
+    for (const [method, url] of [['POST', '/tests/status'], ['POST', '/tests/job'], ['GET', '/tests/run'], ['GET', '/tests/cancel'], ['DELETE', '/tests/run']]) {
+      const r = res();
+      await createReviewHandler(service())(req({ method, url, contentType: 'application/json' }), r.raw);
+      expect(r.out.statusCode, `${method} ${url}`).toBe(405);
+    }
+  });
+
+  it('on startup the plugin recovers stale overlays and registers an exit hook that stops any run', () => {
+    const once = vi.spyOn(process, 'once').mockImplementation((() => process) as never);
+    const { use } = (() => {
+      const use = vi.fn();
+      (reviewPlugin({}).configureServer as (s: unknown) => void)({ middlewares: { use }, config: { server: { host: undefined } } });
+      return { use };
+    })();
+    expect(once).toHaveBeenCalledWith('exit', expect.any(Function));
+    expect(use).toHaveBeenCalledWith('/api/review', expect.any(Function));
+    once.mockRestore();
+  });
+});
+
+describe('credentials never leave the server (HTTP edge)', () => {
+  const secret = ['gh', 'p_', 'abcdefghijklmnopqrstuvwx'].join('');
+
+  it('redacts a token that slipped into an unexpected error', async () => {
+    const r = res();
+    await createReviewHandler(service({ list: vi.fn().mockRejectedValue(new Error(`boom token=${secret} at ${['https:', '//u:p4ss@h.com'].join('')}`)) }))(req({ url: '/list' }), r.raw);
+    expect(r.out.statusCode).toBe(500);
+    expect(r.out.body).not.toContain(secret);
+    expect(r.out.body).not.toContain('p4ss');
+    expect(r.json().error).toContain('[redacted]');
+  });
+
+  it('redacts error details (e.g. file lists) too, and leaves successful data alone', async () => {
+    const r = res();
+    await createReviewHandler(service({ merge: vi.fn().mockRejectedValue(new ReviewError(409, 'conflict', [`file with token=${secret}.txt`, 'a.txt'])) }))(jsonPost({ branch: 'AT-1-x', expectedSha: 'abc1234', approved: true }), r.raw);
+    expect(r.out.body).not.toContain(secret);
+    expect(r.json().details).toEqual(['file with token=[redacted]', 'a.txt']);
+
+    const ok = res();
+    await createReviewHandler(service({ list: vi.fn().mockResolvedValue({ tickets: [{ summary: 'password handling' }] }) }))(req({ url: '/list' }), ok.raw);
+    expect(ok.json().data.tickets[0].summary).toBe('password handling');
   });
 });
 

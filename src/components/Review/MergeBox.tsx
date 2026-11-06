@@ -1,29 +1,35 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { toast } from 'sonner';
-import { AlertTriangleIcon, CheckCircleIcon, GitMergeIcon, LoaderIcon, RefreshCwIcon, ShieldCheckIcon, Undo2Icon, XCircleIcon } from 'lucide-react';
+import { AlertTriangleIcon, CheckCircleIcon, GitMergeIcon, LoaderIcon, RefreshCwIcon, ShieldCheckIcon, ThumbsDownIcon, Undo2Icon, XCircleIcon } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Label } from '@/components/ui/label';
-import { ConfirmDialog } from '@/components/shared/ConfirmDialog';
 import { cn } from '@/lib/utils';
 import { plural } from '@/utils/reviewFormat';
 import { ReviewApiError, mergeReview } from '@/utils/reviewApi';
 import { CopyCommand } from './CopyCommand';
 import { ErrorBanner } from './Feedback';
-import type { ReviewDetail } from '@/types/review';
+import type { ReviewDetail, ReviewIssue } from '@/types/review';
 
 export interface MergeBoxProps {
   detail: ReviewDetail;
-  approved: boolean;
-  onApprovedChange: (approved: boolean) => void;
+  /** The ticket as Jira has it now (its Approval checkboxes decide whether merging is allowed). */
+  ticket: ReviewIssue;
+  onDecide: (decision: 'approved' | 'declined') => void;
+  /** Clear the Approval checkboxes again. */
+  onClear: () => void;
+  clearing: boolean;
+  /** Specs are running: merging waits. */
+  specsRunning: boolean;
   onMerged: () => void;
   onReload: () => void;
   onBusyChange: (busy: boolean) => void;
 }
 
-export const MergeBox = React.forwardRef<HTMLDivElement, MergeBoxProps>(({ detail, approved, onApprovedChange, onMerged, onReload, onBusyChange }, ref) => {
-  const { ticket } = detail;
+export const MergeBox = React.forwardRef<HTMLDivElement, MergeBoxProps>(({ detail, ticket, onDecide, onClear, clearing, specsRunning, onMerged, onReload, onBusyChange }, ref) => {
+  const approved = ticket.approval === 'approved';
+  const declined = ticket.approval === 'declined';
   const [moveToDone, setMoveToDone] = useState(true);
   const [confirming, setConfirming] = useState(false);
   const [merging, setMerging] = useState(false);
@@ -35,7 +41,12 @@ export const MergeBox = React.forwardRef<HTMLDivElement, MergeBoxProps>(({ detai
 
   const alreadyMerged = detail.unmerged === 0;
   const blocked = alreadyMerged || detail.canRebase === false;
-  const canMerge = !blocked && approved;
+  const canMerge = !blocked && approved && !specsRunning;
+
+  // If merging stops being allowed (approval undone, declined, specs started…), the pending confirmation goes away.
+  useEffect(() => {
+    if (!canMerge) setConfirming(false);
+  }, [canMerge]);
 
   useEffect(() => {
     if (!merging) return;
@@ -55,6 +66,7 @@ export const MergeBox = React.forwardRef<HTMLDivElement, MergeBoxProps>(({ detai
   const doMerge = async () => {
     if (inFlight.current) return;
     inFlight.current = true;
+    setConfirming(false);
     setMerging(true);
     setError(null);
     try {
@@ -138,26 +150,52 @@ export const MergeBox = React.forwardRef<HTMLDivElement, MergeBoxProps>(({ detai
           </div>
         )}
 
-        {!blocked && (
-          <div className="flex flex-col gap-3 rounded-lg border border-border/60 bg-muted/30 p-3 sm:flex-row sm:items-center sm:justify-between" data-testid="approval">
-            {approved ? (
-              <>
-                <p className="flex items-center gap-2 text-sm font-medium text-success">
-                  <ShieldCheckIcon className="size-4" /> You approved these changes.
-                </p>
-                <Button type="button" variant="ghost" size="sm" disabled={merging} onClick={() => onApprovedChange(false)}>
-                  <Undo2Icon />
-                  Undo approval
-                </Button>
-              </>
-            ) : (
-              <>
-                <p className="text-sm text-muted-foreground">Read through the changes, then approve to unlock Rebase and merge.</p>
-                <Button type="button" variant="outline" size="sm" onClick={() => onApprovedChange(true)}>
-                  <ShieldCheckIcon />
-                  Approve changes
-                </Button>
-              </>
+        {!alreadyMerged && (
+          <div
+            className={cn(
+              'space-y-3 rounded-lg border p-3',
+              approved && 'border-success/40 bg-success/5',
+              declined && 'border-destructive/40 bg-destructive/5',
+              !approved && !declined && 'border-border/60 bg-muted/30',
+            )}
+            data-testid="approval"
+            data-state={ticket.approval ?? 'none'}
+          >
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <p className={cn('flex items-center gap-2 text-sm font-medium', approved && 'text-success', declined && 'text-destructive', !approved && !declined && 'font-normal text-muted-foreground')}>
+                {approved ? <ShieldCheckIcon className="size-4" /> : declined ? <ThumbsDownIcon className="size-4" /> : null}
+                {approved
+                  ? `Approved in Jira. ${ticket.key} has Approved ticked.`
+                  : declined
+                    ? `Declined in Jira. Merging is blocked until it is approved.`
+                    : 'Read through the changes, then approve or decline. Approving unlocks Rebase and merge.'}
+              </p>
+              <div className="flex flex-wrap gap-2">
+                {!approved && (
+                  <Button type="button" variant="outline" size="sm" disabled={merging || clearing} onClick={() => onDecide('approved')}>
+                    <ShieldCheckIcon />
+                    {declined ? 'Approve instead…' : 'Approve…'}
+                  </Button>
+                )}
+                {!declined && (
+                  <Button type="button" variant="outline" size="sm" disabled={merging || clearing} onClick={() => onDecide('declined')} className="text-destructive">
+                    <ThumbsDownIcon />
+                    Decline…
+                  </Button>
+                )}
+                {(approved || declined) && (
+                  <Button type="button" variant="ghost" size="sm" disabled={merging || clearing} onClick={onClear}>
+                    {clearing ? <LoaderIcon className="animate-spin" /> : <Undo2Icon />}
+                    {clearing ? 'Clearing…' : approved ? 'Undo approval' : 'Clear decision'}
+                  </Button>
+                )}
+              </div>
+            </div>
+            {ticket.reviewInfo && (
+              <div className="rounded-md bg-background/70 p-3" data-testid="review-info">
+                <p className="mb-1 text-xs font-semibold text-muted-foreground">Review information</p>
+                <p className="text-sm break-words whitespace-pre-wrap">{ticket.reviewInfo}</p>
+              </div>
             )}
           </div>
         )}
@@ -197,32 +235,55 @@ export const MergeBox = React.forwardRef<HTMLDivElement, MergeBoxProps>(({ detai
           </ErrorBanner>
         )}
 
-        <Button
-          size="lg"
-          disabled={!canMerge || merging}
-          aria-busy={merging}
-          onClick={() => setConfirming(true)}
-          className="w-full bg-success text-success-foreground hover:bg-success/90 sm:w-auto"
-        >
-          {merging ? <LoaderIcon className="size-5 animate-spin" /> : <GitMergeIcon className="size-5" />}
-          {merging ? 'Rebasing and merging…' : 'Rebase and merge'}
-        </Button>
-        {!blocked && !approved && !merging && <p className="text-xs text-muted-foreground">Approve the changes above to enable this button.</p>}
+        {confirming && !merging && canMerge ? (
+          // Like GitHub: the first click only asks; nothing is sent until the second.
+          <div
+            role="group"
+            aria-label="Confirm rebase and merge"
+            data-testid="merge-confirm"
+            className="space-y-3 rounded-lg border border-success/40 bg-success/5 p-3"
+            onKeyDown={(e) => {
+              if (e.key === 'Escape') setConfirming(false);
+            }}
+          >
+            <p className="text-sm" data-testid="merge-confirm-text">
+              {description}
+            </p>
+            <div className="flex flex-col gap-2 sm:flex-row">
+              <Button
+                size="lg"
+                autoFocus
+                onClick={() => void doMerge()}
+                className="w-full bg-success text-success-foreground hover:bg-success/90 sm:w-auto"
+              >
+                <GitMergeIcon className="size-5" />
+                Confirm rebase and merge
+              </Button>
+              <Button size="lg" variant="outline" onClick={() => setConfirming(false)} className="w-full sm:w-auto">
+                Cancel
+              </Button>
+            </div>
+          </div>
+        ) : (
+          <Button
+            size="lg"
+            disabled={!canMerge || merging}
+            aria-busy={merging}
+            onClick={() => setConfirming(true)}
+            className="w-full bg-success text-success-foreground hover:bg-success/90 sm:w-auto"
+          >
+            {merging ? <LoaderIcon className="size-5 animate-spin" /> : <GitMergeIcon className="size-5" />}
+            {merging ? 'Rebasing and merging…' : 'Rebase and merge'}
+          </Button>
+        )}
+        {!blocked && !approved && !merging && <p className="text-xs text-muted-foreground">{declined ? 'This PR was declined. Approve it above to enable this button.' : 'Approve the changes above to enable this button.'}</p>}
+        {!blocked && approved && specsRunning && !merging && <p className="text-xs text-muted-foreground">Specs are running. Merging is available when they finish (or are cancelled).</p>}
         {merging && (
           <p role="status" className="text-sm text-muted-foreground">
             Rebasing onto {base} and pushing — this can take a few seconds. Please don't close this tab.
           </p>
         )}
       </CardContent>
-
-      <ConfirmDialog
-        open={confirming && !merging}
-        onOpenChange={setConfirming}
-        title={`Rebase and merge into ${base}?`}
-        description={description}
-        confirmLabel="Rebase and merge"
-        onConfirm={doMerge}
-      />
     </Card>
   );
 });

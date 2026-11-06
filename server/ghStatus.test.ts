@@ -91,3 +91,21 @@ describe('createGhChecker', () => {
     expect((await createGhChecker({ findExecutable: installed, run: empty }).check()).detail).toContain('unknown error');
   });
 });
+
+describe('gh output never leaks a token', () => {
+  const tokenLine = `  - Token: ${['gh', 'o_'].join('')}${'x'.repeat(20)}`;
+  it('a ready status only reports the account and host, not the token line gh prints', async () => {
+    const run: GhRunner = vi.fn().mockResolvedValue({ code: 0, stdout: `github.com\n  ✓ Logged in to github.com account BrianBaggs (keyring)\n${tokenLine}\n`, stderr: '' });
+    const status = await createGhChecker({ findExecutable: installed, run }).check();
+    expect(JSON.stringify(status)).not.toContain('xxxx');
+    expect(status.detail).toBe('Signed in to github.com as BrianBaggs.');
+  });
+
+  it('an unexpected failure is redacted before it is shown', async () => {
+    const run: GhRunner = vi.fn().mockResolvedValue({ code: 1, stdout: '', stderr: `token=${'y'.repeat(24)} was rejected` });
+    const status = await createGhChecker({ findExecutable: installed, run }).check();
+    expect(status.state).toBe('error');
+    expect(status.detail).not.toContain('yyyy');
+    expect(status.detail).toContain('[redacted]');
+  });
+});

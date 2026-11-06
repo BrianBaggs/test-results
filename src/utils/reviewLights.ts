@@ -1,9 +1,9 @@
-import type { GhStatus, ReviewList, ReviewStatus } from '@/types/review';
+import type { GhStatus, ReviewList, ReviewStatus, TestServerStatus } from '@/types/review';
 
 export type LightState = 'ok' | 'warn' | 'bad' | 'checking';
 
 export interface Light {
-  id: 'git' | 'repo' | 'acli' | 'gh';
+  id: 'git' | 'repo' | 'acli' | 'gh' | 'test';
   label: string;
   state: LightState;
   text: string;
@@ -15,7 +15,7 @@ export interface Light {
  * Work out each status light from what the server reported. Pure, so it can be
  * tested without rendering.
  */
-export function computeLights(status: ReviewStatus | null, list: ReviewList | null, gh: GhStatus | null, listFailed = false): Light[] {
+export function computeLights(status: ReviewStatus | null, list: ReviewList | null, gh: GhStatus | null, listFailed = false, testServer: TestServerStatus | null = null): Light[] {
   const lights: Light[] = [];
   const req = (id: string) => status?.requirements.find((r) => r.id === id);
 
@@ -68,6 +68,19 @@ export function computeLights(status: ReviewStatus | null, list: ReviewList | nu
       state: 'warn',
       text: gh.state === 'not-installed' ? 'Not installed' : gh.state === 'not-authenticated' ? 'Not signed in' : 'Error',
       hint: { message: gh.detail, command: gh.command, url: gh.url },
+    });
+
+  // The test server is the QA team's own (`yarn test:server`); this app never starts it.
+  // It's only needed to run specs, so a red light never blocks reviewing.
+  if (!testServer) lights.push({ id: 'test', label: 'Test server', state: 'checking', text: 'Checking…' });
+  else if (testServer.up) lights.push({ id: 'test', label: 'Test server', state: 'ok', text: `Running on :${testServer.port}` });
+  else
+    lights.push({
+      id: 'test',
+      label: 'Test server',
+      state: 'bad',
+      text: 'Not running',
+      hint: { message: "The local test server isn't running, so specs can't be run from here. Start it in securicy-app (this app never starts it for you).", command: testServer.startCommand },
     });
 
   return lights;

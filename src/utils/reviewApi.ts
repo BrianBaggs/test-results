@@ -1,4 +1,4 @@
-import type { GhStatus, MergeResult, ReviewDetail, ReviewList, ReviewStatus } from '@/types/review';
+import type { GhStatus, MergeResult, ReviewDetail, ReviewIssue, ReviewList, ReviewStatus, SpecJob, TestServerStatus } from '@/types/review';
 
 /** An error from the local review API, with the conflicting files if any. */
 export class ReviewApiError extends Error {
@@ -44,4 +44,34 @@ export const mergeReview = (input: { branch: string; expectedSha: string; moveTo
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(input),
+  });
+
+export type ReviewDecision = 'approved' | 'declined' | 'none';
+
+/** Ticks Approved/Declined (or clears it) on the AT ticket and records the review information. */
+export const submitReviewDecision = (input: { branch: string; expectedSha: string; decision: ReviewDecision; info?: string }) =>
+  call<ReviewIssue>('/decision', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(input),
+  });
+
+// ---- Playwright spec runs (against the local test server) ----
+
+export const fetchTestServer = () => call<TestServerStatus>('/tests/status');
+
+export const startSpecRun = (input: { branch: string; expectedSha: string; specs: string[] | 'all' }) =>
+  call<{ id: string }>('/tests/run', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(input),
+  });
+
+export const fetchSpecJob = (id: string, since = 0) => call<SpecJob>(`/tests/job?id=${encodeURIComponent(id)}&since=${since}`);
+
+export const cancelSpecRun = (id: string) =>
+  call<SpecJob>('/tests/cancel', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ id }),
   });

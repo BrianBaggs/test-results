@@ -30,6 +30,9 @@ const ticket = (over = {}) => ({
   summary: 'Add tests for comments carrying over',
   status: 'Review',
   assignee: 'Brian Baggs',
+  reviewers: [],
+  approval: null,
+  reviewInfo: '',
   url: 'https://securicyapp.atlassian.net/browse/AT-727',
   branches: [branch()],
   ...over
@@ -71,6 +74,9 @@ const reviewDetail = (over = {}) => ({
     summary: 'Add tests for comments carrying over',
     status: 'Review',
     assignee: 'Brian Baggs',
+    reviewers: ['Matthew Carabin'],
+    approval: null,
+    reviewInfo: '',
     url: 'https://securicyapp.atlassian.net/browse/AT-727'
   },
   sha: SHA,
@@ -102,10 +108,63 @@ const reviewDetail = (over = {}) => ({
       patch: ['@@ -1,2 +1,3 @@', ' unchanged line', '-removed line', '+added line one', '+added line two'].join('\n')
     }
   ],
+  specs: [],
+  serverCodeChanged: [],
+  supportFiles: [],
   totals: { additions: 2, deletions: 1 },
   branchUrl: 'https://github.com/carbidesecure/securicy-app/tree/AT-727-add-test',
   ...over
 })
+
+const SPEC_A = 'spec/playwright/playwright/e2e/tasks/show/admin/recurring_comments_completed.spec.ts'
+const SPEC_B = 'spec/playwright/playwright/e2e/tasks/show/owner/recurring_comments_completed.spec.ts'
+
+const testServerStatus = (over = {}) => ({ up: true, host: '127.0.0.1', port: 5017, startCommand: 'yarn test:server', activeJob: null, ...over })
+
+const specResult = (file: string, status = 'passed') => ({
+  file,
+  status,
+  durationMs: 4200,
+  tests:
+    status === 'passed'
+      ? [{ title: 'Recurring task comments › Comment stays shared', line: 41, status: 'passed', durationMs: 4200, error: null }]
+      : [
+          { title: 'Recurring task comments › Comment stays shared', line: 41, status: 'passed', durationMs: 1000, error: null },
+          {
+            title: 'Recurring task comments › Evidence is copied',
+            line: 55,
+            status: 'failed',
+            durationMs: 3200,
+            error: {
+              message: 'Error: expect(locator).toContainText(expected)\n\nExpected substring: "Evidence for this"',
+              stack: 'Error: expect(locator).toContainText(expected)\n    at recurring_comments_completed.spec.ts:57:9',
+              snippet: "> 57 | await expect(page.locator('.comments')).toContainText('Evidence for this')"
+            }
+          }
+        ]
+})
+
+const specJob = (over = {}) => ({
+  id: 'job-1',
+  branch: 'AT-727-add-test',
+  sha: SHA,
+  status: 'passed',
+  specs: [SPEC_A],
+  startedAt: new Date(Date.now() - 12_000).toISOString(),
+  finishedAt: new Date().toISOString(),
+  elapsedMs: 12_400,
+  output: 'Running 1 test using 1 worker\n  ✓  1 [chromium] › recurring_comments_completed.spec.ts:41:7 › works (4.2s)\n  1 passed (5.0s)\n',
+  nextOffset: 120,
+  truncated: false,
+  results: [specResult(SPEC_A)],
+  error: null,
+  warnings: ['Copied 2 fixture/cassette files from this PR into your test server checkout for the run. They are restored when it finishes.'],
+  serverCodeChanged: [],
+  exitCode: 0,
+  ...over
+})
+
+const runningJob = (status = 'running') => specJob({ status, finishedAt: null, results: null, exitCode: null, output: 'Running 1 test using 1 worker\n', nextOffset: 30, elapsedMs: 2000 })
 
 const ok = (data: unknown) => ({ status: 200, contentType: 'application/json', body: JSON.stringify({ success: true, data }) })
 const fail = (status: number, error: string, details: string[] = []) => ({
@@ -116,9 +175,30 @@ const fail = (status: number, error: string, details: string[] = []) => ({
 
 async function mockApi(
   page: Page,
-  opts: { status?: unknown; gh?: unknown; list?: unknown; detail?: unknown; merge?: unknown; mergeDelayMs?: number } = {}
+  opts: {
+    status?: unknown
+    gh?: unknown
+    list?: unknown
+    detail?: unknown
+    merge?: unknown
+    mergeDelayMs?: number
+    decision?: unknown
+    testServer?: unknown
+    testRun?: unknown
+    /** What the job endpoint returns on each poll; the last one repeats. */
+    jobs?: unknown[]
+  } = {}
 ) {
-  const calls = { list: 0, detail: 0, merge: [] as Array<Record<string, unknown>> }
+  const calls = {
+    list: 0,
+    detail: 0,
+    merge: [] as Array<Record<string, unknown>>,
+    decision: [] as Array<Record<string, unknown>>,
+    run: [] as Array<Record<string, unknown>>,
+    cancel: 0,
+    jobPolls: 0,
+    testServer: 0
+  }
 
   await page.route('**/api/review/status', route => route.fulfill(ok(opts.status ?? reviewStatus())))
 
@@ -143,6 +223,48 @@ async function mockApi(
     )
   })
 
+  // Jira echoes back what was saved: the ticket with the new Approval and Review Information.
+  await page.route('**/api/review/decision', async route => {
+    const body = route.request().postDataJSON() as { decision: string; info?: string }
+
+    calls.decision.push(body)
+
+    await route.fulfill(
+      (opts.decision as Parameters<typeof route.fulfill>[0] | undefined) ??
+        ok({
+          ...(((opts.detail as { ticket?: object } | undefined)?.ticket ?? reviewDetail().ticket) as object),
+          approval: body.decision === 'none' ? null : body.decision,
+          reviewInfo: body.info ?? ''
+        })
+    )
+  })
+
+  await page.route('**/api/review/tests/status', route => {
+    calls.testServer++
+
+    return route.fulfill(ok(opts.testServer ?? testServerStatus()))
+  })
+
+  await page.route('**/api/review/tests/run', async route => {
+    calls.run.push(route.request().postDataJSON())
+
+    await route.fulfill((opts.testRun as Parameters<typeof route.fulfill>[0] | undefined) ?? ok({ id: 'job-1' }))
+  })
+
+  await page.route('**/api/review/tests/job**', async route => {
+    const jobs = opts.jobs ?? [specJob()]
+
+    await route.fulfill(ok(jobs[Math.min(calls.jobPolls, jobs.length - 1)]))
+
+    calls.jobPolls++
+  })
+
+  await page.route('**/api/review/tests/cancel', async route => {
+    calls.cancel++
+
+    await route.fulfill(ok(runningJob('cleaning')))
+  })
+
   return calls
 }
 
@@ -164,16 +286,38 @@ const mergeBox = (page: Page) => page.getByTestId('merge-box')
 
 const mergeButton = (page: Page) => mergeBox(page).getByRole('button', { name: /Rebase and merge|Rebasing and merging/ })
 
-const approve = async (page: Page) => {
-  await page.getByTestId('approval').getByRole('button', { name: 'Approve changes' }).click()
+/** Approve the way a reviewer does: the button, then the modal. */
+const approve = async (page: Page, notes?: string) => {
+  await page.getByTestId('approval').getByRole('button', { name: /^Approve/ }).click()
+
+  if (notes !== undefined) await page.getByTestId('decision-modal').getByLabel(/Review information/).fill(notes)
+
+  await page.getByTestId('decision-modal').getByRole('button', { name: /Approve and save to Jira/ }).click()
+
+  await expect(page.getByTestId('decision-modal')).toBeHidden()
 }
+
+const decline = async (page: Page, reason: string) => {
+  await page.getByTestId('approval').getByRole('button', { name: /^Decline/ }).click()
+
+  await page.getByTestId('decision-modal').getByLabel(/Review information/).fill(reason)
+
+  await page.getByTestId('decision-modal').getByRole('button', { name: /Decline and save to Jira/ }).click()
+
+  await expect(page.getByTestId('decision-modal')).toBeHidden()
+}
+
+/** Like GitHub: the first click only asks. These are the inline second step (no dialog). */
+const confirmBox = (page: Page) => page.getByTestId('merge-confirm')
+
+const confirmMerge = (page: Page) => confirmBox(page).getByRole('button', { name: 'Confirm rebase and merge' })
 
 async function approveAndConfirm(page: Page) {
   await approve(page)
 
   await mergeButton(page).click()
 
-  await page.getByRole('dialog').getByRole('button', { name: 'Rebase and merge' }).click()
+  await confirmMerge(page).click()
 }
 
 test.describe('Review - navigation and the table of tickets', () => {
@@ -356,9 +500,11 @@ test.describe('Review - status lights and setup help', () => {
 
     await openReviewTab(page)
 
-    for (const id of ['git', 'repo', 'acli', 'gh']) {
+    for (const id of ['git', 'repo', 'acli', 'gh', 'test']) {
       await expect(page.getByTestId(`light-${id}`)).toHaveAttribute('data-state', 'ok')
     }
+
+    await expect(page.getByTestId('light-test')).toContainText('Running on :5017')
 
     await expect(page.getByTestId('light-acli')).toContainText('Signed in')
 
@@ -393,6 +539,22 @@ test.describe('Review - status lights and setup help', () => {
     await expect(page.getByTestId('light-acli')).toHaveAttribute('data-state', 'bad')
 
     await expect(page.getByTestId('review-table')).toBeHidden()
+  })
+
+  test('should show the test server light red, with how to start it, when it is not running (and not block the review)', async ({ page }) => {
+    await mockApi(page, { testServer: testServerStatus({ up: false }) })
+
+    await openReviewTab(page)
+
+    await expect(page.getByTestId('light-test')).toHaveAttribute('data-state', 'bad')
+
+    await expect(page.getByTestId('light-test')).toContainText('Not running')
+
+    await expect(page.getByTestId('status-hints')).toContainText('yarn test:server')
+
+    await expect(page.getByTestId('status-hints')).toContainText('never starts it for you')
+
+    await expect(page.getByTestId('review-ticket')).toHaveCount(1)
   })
 
   test('should show gh amber (not blocking) when it is not signed in', async ({ page }) => {
@@ -595,7 +757,7 @@ test.describe('Review - approving and the merge box', () => {
 
     await approve(page)
 
-    await expect(page.getByText('You approved these changes.')).toBeVisible()
+    await expect(page.getByText(/Approved in Jira/)).toBeVisible()
 
     await expect(mergeButton(page)).toBeEnabled()
   })
@@ -607,9 +769,11 @@ test.describe('Review - approving and the merge box', () => {
 
     await page.getByRole('tab', { name: /Files changed/ }).click()
 
-    await page.getByTestId('review-footer').getByRole('button', { name: 'Approve changes' }).click()
+    await page.getByTestId('review-footer').getByRole('button', { name: /^Approve/ }).click()
 
-    await expect(page.getByTestId('review-footer')).toContainText('you approved these changes')
+    await page.getByTestId('decision-modal').getByRole('button', { name: /Approve and save to Jira/ }).click()
+
+    await expect(page.getByTestId('review-footer')).toContainText('approved in Jira')
 
     await page.getByTestId('review-footer').getByRole('button', { name: 'Go to merge box' }).click()
 
@@ -618,16 +782,14 @@ test.describe('Review - approving and the merge box', () => {
     await expect(mergeButton(page)).toBeEnabled()
   })
 
-  test('should remember the approval for the session, but only for this exact commit', async ({ page }) => {
-    await mockApi(page)
+  test('should read an existing approval from Jira, so an approved ticket can be merged straight away', async ({ page }) => {
+    await mockApi(page, { detail: reviewDetail({ ticket: { ...reviewDetail().ticket, approval: 'approved', reviewInfo: 'LGTM' } }) })
 
     await openFirstReview(page)
 
-    await approve(page)
+    await expect(page.getByTestId('approval')).toHaveAttribute('data-state', 'approved')
 
-    await page.getByRole('button', { name: /Back to Review/ }).click()
-
-    await page.getByRole('button', { name: 'Review AT-727' }).click()
+    await expect(page.getByTestId('review-info')).toContainText('LGTM')
 
     await expect(mergeButton(page)).toBeEnabled()
   })
@@ -677,7 +839,12 @@ test.describe('Review - approving and the merge box', () => {
 
     await expect(mergeButton(page)).toBeDisabled()
 
-    await expect(page.getByTestId('approval')).toBeHidden()
+    // The reviewer can still record a decision (e.g. decline it), but approving does not unlock a conflicting merge.
+    await approve(page)
+
+    await expect(mergeButton(page)).toBeDisabled()
+
+    await expect(page.getByTestId('merge-confirm')).toHaveCount(0)
   })
 
   test('should block merging when playwright-main already has the changes', async ({ page }) => {
@@ -690,12 +857,62 @@ test.describe('Review - approving and the merge box', () => {
     await expect(mergeBox(page)).toContainText('already has these changes')
 
     await expect(mergeButton(page)).toBeDisabled()
+
+    // Nothing left to approve once the changes are already in playwright-main.
+    await expect(page.getByTestId('approval')).toBeHidden()
   })
 })
 
 test.describe('Review - rebase and merge', () => {
 
-  test('should ask for confirmation, spelling out the rebase, push, branch deletion and Jira move', async ({ page }) => {
+  test('should ask first: one click shows Confirm and Cancel inline (no dialog) and sends nothing', async ({ page }) => {
+    const calls = await mockApi(page)
+
+    await openFirstReview(page)
+
+    await approve(page)
+
+    await expect(confirmBox(page)).toBeHidden()
+
+    await mergeButton(page).click()
+
+    await expect(page.getByRole('dialog')).toHaveCount(0)
+
+    await expect(confirmBox(page)).toBeVisible()
+
+    await expect(confirmMerge(page)).toBeVisible()
+
+    await expect(confirmMerge(page)).toBeFocused()
+
+    await expect(confirmBox(page).getByRole('button', { name: 'Cancel' })).toBeVisible()
+
+    // The first button is replaced, so the merge can't be triggered by a stray second click.
+    await expect(mergeButton(page)).toHaveCount(0)
+
+    expect(calls.merge).toHaveLength(0)
+  })
+
+  test('should spell out the rebase, push, branch deletion and Jira move in the confirmation', async ({ page }) => {
+    await mockApi(page)
+
+    await openFirstReview(page)
+
+    await approve(page)
+
+    await mergeButton(page).click()
+
+    const text = page.getByTestId('merge-confirm-text')
+
+    await expect(text).toContainText('rebases 1 commit from AT-727-add-test onto the latest playwright-main')
+
+    await expect(text).toContainText('pushes the result to origin/playwright-main')
+
+    await expect(text).toContainText('deletes the branch AT-727-add-test from origin')
+
+    await expect(text).toContainText('AT-727 will then be moved to Done in Jira')
+  })
+
+  test('should put everything back when Cancel is clicked, and send nothing', async ({ page }) => {
     const calls = await mockApi(page)
 
     await openFirstReview(page)
@@ -704,19 +921,51 @@ test.describe('Review - rebase and merge', () => {
 
     await mergeButton(page).click()
 
-    const dialog = page.getByRole('dialog')
+    await confirmBox(page).getByRole('button', { name: 'Cancel' }).click()
 
-    await expect(dialog).toContainText('Rebase and merge into playwright-main?')
+    await expect(confirmBox(page)).toBeHidden()
 
-    await expect(dialog).toContainText('pushes the result to origin/playwright-main')
+    await expect(mergeButton(page)).toBeEnabled()
 
-    await expect(dialog).toContainText('deletes the branch AT-727-add-test from origin')
+    expect(calls.merge).toHaveLength(0)
+  })
 
-    await expect(dialog).toContainText('AT-727 will then be moved to Done in Jira')
+  test('should cancel on Escape', async ({ page }) => {
+    const calls = await mockApi(page)
 
-    await dialog.getByRole('button', { name: 'Cancel' }).click()
+    await openFirstReview(page)
 
-    await expect(dialog).toBeHidden()
+    await approve(page)
+
+    await mergeButton(page).click()
+
+    await expect(confirmMerge(page)).toBeFocused()
+
+    await page.keyboard.press('Escape')
+
+    await expect(confirmBox(page)).toBeHidden()
+
+    await expect(mergeButton(page)).toBeEnabled()
+
+    expect(calls.merge).toHaveLength(0)
+  })
+
+  test('should withdraw the confirmation if the PR is declined while it is open', async ({ page }) => {
+    const calls = await mockApi(page)
+
+    await openFirstReview(page)
+
+    await approve(page)
+
+    await mergeButton(page).click()
+
+    await expect(confirmBox(page)).toBeVisible()
+
+    await decline(page, 'Found a problem after all')
+
+    await expect(confirmBox(page)).toBeHidden()
+
+    await expect(mergeButton(page)).toBeDisabled()
 
     expect(calls.merge).toHaveLength(0)
   })
@@ -754,9 +1003,9 @@ test.describe('Review - rebase and merge', () => {
 
     await mergeButton(page).click()
 
-    await expect(page.getByRole('dialog')).not.toContainText('Jira')
+    await expect(page.getByTestId('merge-confirm-text')).not.toContainText('Jira')
 
-    await page.getByRole('dialog').getByRole('button', { name: 'Rebase and merge' }).click()
+    await confirmMerge(page).click()
 
     await expect(page.getByText('AT-727: 1 commit rebased and merged into playwright-main.')).toBeVisible()
 
@@ -796,9 +1045,7 @@ test.describe('Review - rebase and merge', () => {
     await mergeButton(page).click()
 
     // Click confirm twice, as fast as possible.
-    const confirm = page.getByRole('dialog').getByRole('button', { name: 'Rebase and merge' })
-
-    await confirm.dblclick({ noWaitAfter: true }).catch(() => undefined)
+    await confirmMerge(page).dblclick({ noWaitAfter: true }).catch(() => undefined)
 
     await expect(mergeButton(page)).toBeDisabled()
 
@@ -887,6 +1134,672 @@ test.describe('Review - rebase and merge', () => {
     await expect(page.getByTestId('merge-error')).toContainText('Could not reach the local review server')
 
     await expect(mergeButton(page)).toBeEnabled()
+  })
+})
+
+test.describe('Review - approving and declining (Jira Approval and Review Information fields)', () => {
+
+  test('should open a modal with a text box when approving, and save the notes with the approval', async ({ page }) => {
+    const calls = await mockApi(page)
+
+    await openFirstReview(page)
+
+    await page.getByTestId('approval').getByRole('button', { name: /^Approve/ }).click()
+
+    const modal = page.getByTestId('decision-modal')
+
+    await expect(modal.getByRole('heading', { name: 'Approve AT-727' })).toBeVisible()
+
+    await expect(modal).toContainText('ticks Approved on AT-727 in Jira')
+
+    await expect(modal).toContainText('Review Information')
+
+    await modal.getByLabel(/Review information/).fill('Looks good, nice cleanup.')
+
+    await expect(modal.getByTestId('review-info-count')).toContainText('25 / 5,000')
+
+    await modal.getByRole('button', { name: 'Approve and save to Jira' }).click()
+
+    await expect(page.getByText('AT-727 approved in Jira.')).toBeVisible()
+
+    await expect(modal).toBeHidden()
+
+    await expect(page.getByTestId('approval')).toHaveAttribute('data-state', 'approved')
+
+    await expect(page.getByTestId('review-info')).toContainText('Looks good, nice cleanup.')
+
+    await expect(page.getByTestId('pr-sidebar')).toContainText('Approved')
+
+    await expect(mergeButton(page)).toBeEnabled()
+
+    expect(calls.decision).toEqual([{ branch: 'AT-727-add-test', expectedSha: SHA, decision: 'approved', info: 'Looks good, nice cleanup.' }])
+  })
+
+  test('should approve with no notes at all', async ({ page }) => {
+    const calls = await mockApi(page)
+
+    await openFirstReview(page)
+
+    await approve(page)
+
+    expect(calls.decision).toEqual([{ branch: 'AT-727-add-test', expectedSha: SHA, decision: 'approved' }])
+  })
+
+  test('should require a reason to decline, then check Declined and save the reason', async ({ page }) => {
+    const calls = await mockApi(page)
+
+    await openFirstReview(page)
+
+    await page.getByTestId('approval').getByRole('button', { name: /^Decline/ }).click()
+
+    const modal = page.getByTestId('decision-modal')
+
+    await expect(modal.getByRole('heading', { name: 'Decline AT-727' })).toBeVisible()
+
+    await modal.getByRole('button', { name: 'Decline and save to Jira' }).click()
+
+    await expect(modal.getByTestId('review-info-help')).toContainText('Say why you are declining')
+
+    await expect(modal.getByRole('button', { name: 'Decline and save to Jira' })).toBeDisabled()
+
+    expect(calls.decision).toHaveLength(0)
+
+    await modal.getByLabel(/Review information/).fill('The cleanup step is missing.\nAlso tag it @critical.')
+
+    await modal.getByRole('button', { name: 'Decline and save to Jira' }).click()
+
+    await expect(page.getByText('AT-727 declined in Jira.')).toBeVisible()
+
+    await expect(page.getByTestId('approval')).toHaveAttribute('data-state', 'declined')
+
+    await expect(page.getByText(/Declined in Jira. Merging is blocked/)).toBeVisible()
+
+    await expect(page.getByTestId('review-info')).toContainText('The cleanup step is missing.')
+
+    await expect(mergeButton(page)).toBeDisabled()
+
+    expect(calls.decision).toEqual([
+      { branch: 'AT-727-add-test', expectedSha: SHA, decision: 'declined', info: 'The cleanup step is missing.\nAlso tag it @critical.' }
+    ])
+  })
+
+  test('should let a declined PR be approved instead, which unlocks the merge', async ({ page }) => {
+    await mockApi(page)
+
+    await openFirstReview(page)
+
+    await decline(page, 'Needs a cleanup step')
+
+    await expect(mergeButton(page)).toBeDisabled()
+
+    await page.getByTestId('approval').getByRole('button', { name: /Approve instead/ }).click()
+
+    await expect(page.getByTestId('decision-modal').getByLabel(/Review information/)).toHaveValue('Needs a cleanup step')
+
+    await page.getByTestId('decision-modal').getByRole('button', { name: /Approve and save to Jira/ }).click()
+
+    await expect(page.getByTestId('approval')).toHaveAttribute('data-state', 'approved')
+
+    await expect(mergeButton(page)).toBeEnabled()
+  })
+
+  test('should undo a decision, which clears the checkbox in Jira', async ({ page }) => {
+    const calls = await mockApi(page)
+
+    await openFirstReview(page)
+
+    await approve(page)
+
+    await page.getByRole('button', { name: /Undo approval/ }).click()
+
+    await expect(page.getByTestId('approval')).toHaveAttribute('data-state', 'none')
+
+    await expect(mergeButton(page)).toBeDisabled()
+
+    expect(calls.decision.at(-1)).toEqual({ branch: 'AT-727-add-test', expectedSha: SHA, decision: 'none' })
+  })
+
+  test('should show a loading indicator while saving and not let the modal be closed', async ({ page }) => {
+    await mockApi(page)
+
+    await page.route('**/api/review/decision', async route => {
+      await new Promise(resolve => setTimeout(resolve, 1200))
+
+      await route.fulfill(ok({ ...reviewDetail().ticket, approval: 'approved', reviewInfo: '' }))
+    })
+
+    await openFirstReview(page)
+
+    await page.getByTestId('approval').getByRole('button', { name: /^Approve/ }).click()
+
+    const modal = page.getByTestId('decision-modal')
+
+    await modal.getByRole('button', { name: 'Approve and save to Jira' }).click()
+
+    await expect(modal.getByRole('button', { name: /Saving to Jira/ })).toBeDisabled()
+
+    await expect(modal.getByRole('button', { name: /Saving to Jira/ }).locator('.animate-spin')).toBeVisible()
+
+    await expect(modal.getByRole('button', { name: 'Cancel' })).toBeDisabled()
+
+    await page.keyboard.press('Escape')
+
+    await expect(modal).toBeVisible()
+
+    await expect(modal).toBeHidden({ timeout: 5000 })
+  })
+
+  test('should keep the typed text and offer a manual fallback when Jira cannot be updated', async ({ page }) => {
+    await mockApi(page, {
+      decision: fail(502, "Your acli can't set these Jira fields. Set Approval and Review Information on AT-727 in Jira instead.")
+    })
+
+    await openFirstReview(page)
+
+    await page.getByTestId('approval').getByRole('button', { name: /^Decline/ }).click()
+
+    const modal = page.getByTestId('decision-modal')
+
+    await modal.getByLabel(/Review information/).fill('Please fix the tags')
+
+    await modal.getByRole('button', { name: 'Decline and save to Jira' }).click()
+
+    await expect(modal.getByTestId('decision-error')).toContainText("Your acli can't set these Jira fields")
+
+    await expect(modal.getByLabel(/Review information/)).toHaveValue('Please fix the tags')
+
+    await expect(modal.getByRole('button', { name: /Copy review text/ })).toBeVisible()
+
+    await expect(modal.getByRole('link', { name: /Open AT-727 in Jira/ })).toHaveAttribute('href', 'https://securicyapp.atlassian.net/browse/AT-727')
+
+    await expect(page.getByTestId('approval')).toHaveAttribute('data-state', 'none')
+  })
+
+  test('should cancel without saving anything', async ({ page }) => {
+    const calls = await mockApi(page)
+
+    await openFirstReview(page)
+
+    await page.getByTestId('approval').getByRole('button', { name: /^Approve/ }).click()
+
+    await page.getByTestId('decision-modal').getByLabel(/Review information/).fill('half written')
+
+    await page.getByTestId('decision-modal').getByRole('button', { name: 'Cancel' }).click()
+
+    await expect(page.getByTestId('decision-modal')).toBeHidden()
+
+    expect(calls.decision).toHaveLength(0)
+
+    await expect(page.getByTestId('approval')).toHaveAttribute('data-state', 'none')
+  })
+
+  test('should show the reviewer under the assignee in the sidebar', async ({ page }) => {
+    await mockApi(page)
+
+    await openFirstReview(page)
+
+    const labels = await page.getByTestId('pr-sidebar').locator('p.font-semibold').allTextContents()
+
+    expect(labels.indexOf('Reviewer')).toBe(labels.indexOf('Assignee') + 1)
+
+    await expect(page.getByTestId('pr-sidebar')).toContainText('Matthew Carabin')
+  })
+})
+
+test.describe('Review - running the PR\'s Playwright specs', () => {
+  const prWithSpecs = (over = {}) => reviewDetail({ specs: [SPEC_A, SPEC_B], ...over })
+
+  async function openSpecs(page: Page) {
+    await openFirstReview(page)
+
+    await page.getByRole('tab', { name: /^Specs/ }).click()
+
+    await expect(page.getByTestId('specs-panel')).toBeVisible()
+  }
+
+  test('should only show a Specs tab when the PR adds or changes specs', async ({ page }) => {
+    await mockApi(page)
+
+    await openFirstReview(page)
+
+    await expect(page.getByRole('tab', { name: /^Specs/ })).toBeHidden()
+  })
+
+  test('should list the specs with play buttons and a green test server light', async ({ page }) => {
+    await mockApi(page, { detail: prWithSpecs() })
+
+    await openSpecs(page)
+
+    await expect(page.getByRole('tab', { name: 'Specs (2)' })).toBeVisible()
+
+    await expect(page.getByTestId('spec-row')).toHaveCount(2)
+
+    await expect(page.getByTestId('test-server-badge')).toHaveAttribute('data-state', 'ok')
+
+    await expect(page.getByTestId('test-server-badge')).toContainText('Running on :5017')
+
+    await expect(page.getByTestId('run-all-specs')).toBeEnabled()
+
+    await expect(page.getByRole('button', { name: 'Run recurring_comments_completed.spec.ts' })).toHaveCount(2)
+  })
+
+  test('should disable running and say to run yarn test:server when the test server is down (red light)', async ({ page }) => {
+    const calls = await mockApi(page, { detail: prWithSpecs(), testServer: testServerStatus({ up: false }) })
+
+    await openSpecs(page)
+
+    await expect(page.getByTestId('test-server-badge')).toHaveAttribute('data-state', 'bad')
+
+    await expect(page.getByTestId('test-server-down')).toContainText('yarn test:server')
+
+    await expect(page.getByTestId('test-server-down')).toContainText('never starts it for you')
+
+    await expect(page.getByTestId('run-all-specs')).toBeDisabled()
+
+    for (const button of await page.getByRole('button', { name: /^Run recurring/ }).all()) await expect(button).toBeDisabled()
+
+    expect(calls.run).toHaveLength(0)
+  })
+
+  test('should turn green and enable the play buttons once the server is started', async ({ page }) => {
+    let up = false
+
+    await mockApi(page, { detail: prWithSpecs() })
+
+    await page.route('**/api/review/tests/status', route => route.fulfill(ok(testServerStatus({ up }))))
+
+    await openSpecs(page)
+
+    await expect(page.getByTestId('test-server-badge')).toHaveAttribute('data-state', 'bad')
+
+    up = true
+
+    await page.getByRole('button', { name: /Check again/ }).click()
+
+    await expect(page.getByTestId('test-server-badge')).toHaveAttribute('data-state', 'ok')
+
+    await expect(page.getByTestId('test-server-down')).toBeHidden()
+
+    await expect(page.getByTestId('run-all-specs')).toBeEnabled()
+  })
+
+  test('should run one spec from its play button and show live progress in a modal, then a green check', async ({ page }) => {
+    const calls = await mockApi(page, {
+      detail: prWithSpecs(),
+      jobs: [
+        runningJob('preparing'),
+        runningJob('syncing'),
+        runningJob('running'),
+        specJob({ specs: [SPEC_B], results: [specResult(SPEC_B)] })
+      ]
+    })
+
+    await openSpecs(page)
+
+    await page.getByRole('button', { name: 'Run recurring_comments_completed.spec.ts' }).nth(1).click()
+
+    const modal = page.getByTestId('spec-run-modal')
+
+    await expect(modal).toBeVisible()
+
+    await expect(modal.getByRole('heading', { name: 'Running specs' })).toBeVisible()
+
+    await modal.getByRole('tab', { name: 'Summary' }).click()
+
+    await expect(modal.getByTestId('run-progress').locator('.animate-spin').first()).toBeVisible()
+
+    await expect(modal.getByTestId('phase-running')).toHaveAttribute('data-state', 'active', { timeout: 8000 })
+
+    await expect(modal.getByTestId('run-banner')).toHaveAttribute('data-status', 'passed', { timeout: 10_000 })
+
+    await expect(modal.getByRole('heading', { name: 'Specs passed' })).toBeVisible()
+
+    await expect(modal.getByTestId('run-counts')).toContainText('✓ 1 passed')
+
+    await expect(modal.getByTestId('run-warnings')).toContainText('Copied 2 fixture/cassette files')
+
+    await modal.getByRole('tab', { name: 'Output' }).click()
+
+    await expect(modal.getByRole('log')).toContainText('Running 1 test using 1 worker')
+
+    await expect(modal.getByRole('log')).toContainText('1 passed')
+
+    expect(calls.run).toEqual([{ branch: 'AT-727-add-test', expectedSha: SHA, specs: [SPEC_B] }])
+
+    await modal.getByRole('button', { name: 'Close' }).last().click()
+
+    await expect(modal).toBeHidden()
+
+    await expect(page.getByTestId('spec-row').nth(1).getByLabel('Passed')).toBeVisible()
+
+    await expect(page.getByRole('tab', { name: /^Specs/ }).getByLabel('Specs passed')).toBeVisible()
+
+    await expect(page.getByTestId('specs-last-run')).toContainText('✓ 1 passed')
+  })
+
+  test('should run all the PR\'s specs', async ({ page }) => {
+    const calls = await mockApi(page, { detail: prWithSpecs(), jobs: [specJob({ specs: [SPEC_A, SPEC_B], results: [specResult(SPEC_A), specResult(SPEC_B)] })] })
+
+    await openSpecs(page)
+
+    await page.getByTestId('run-all-specs').click()
+
+    await expect(page.getByTestId('spec-run-modal').getByTestId('run-banner')).toHaveAttribute('data-status', 'passed')
+
+    await expect(page.getByTestId('spec-run-modal').getByTestId('run-banner')).toContainText('2 tests in 2 files')
+
+    expect(calls.run).toEqual([{ branch: 'AT-727-add-test', expectedSha: SHA, specs: 'all' }])
+  })
+
+  test('should show a red X, the error message and the stack trace when a spec fails', async ({ page }) => {
+    await mockApi(page, {
+      detail: prWithSpecs(),
+      jobs: [specJob({ status: 'failed', exitCode: 1, specs: [SPEC_A], results: [specResult(SPEC_A, 'failed')], output: '  ✘  1 breaks\n  1 failed\n' })]
+    })
+
+    await openSpecs(page)
+
+    await page.getByRole('button', { name: 'Run recurring_comments_completed.spec.ts' }).first().click()
+
+    const modal = page.getByTestId('spec-run-modal')
+
+    await expect(modal.getByTestId('run-banner')).toHaveAttribute('data-status', 'failed')
+
+    await expect(modal.getByRole('heading', { name: 'Specs failed' })).toBeVisible()
+
+    await expect(modal.getByTestId('run-banner')).toContainText('1 test failed')
+
+    await expect(modal.getByTestId('run-counts')).toContainText('✗ 1 failed')
+
+    await expect(modal.getByTestId('spec-error')).toContainText('expect(locator).toContainText(expected)')
+
+    await expect(modal.getByTestId('spec-error')).toContainText('Expected substring: "Evidence for this"')
+
+    await expect(modal.getByTestId('spec-error')).toContainText("> 57 | await expect(page.locator('.comments'))")
+
+    await expect(modal.getByTestId('spec-stack')).toContainText('at recurring_comments_completed.spec.ts:57:9')
+
+    await expect(modal.getByRole('button', { name: /Run again/ })).toBeEnabled()
+
+    await modal.getByRole('button', { name: 'Close' }).last().click()
+
+    await expect(page.getByTestId('spec-row').first().getByLabel('Failed')).toBeVisible()
+
+    await expect(page.getByRole('tab', { name: /^Specs/ }).getByLabel('Specs failed')).toBeVisible()
+  })
+
+  test('should show the raw output while the run is going, following the latest line', async ({ page }) => {
+    await mockApi(page, {
+      detail: prWithSpecs(),
+      jobs: [
+        { ...runningJob('running'), output: 'Running 2 tests using 1 worker\n', nextOffset: 31 },
+        { ...runningJob('running'), output: '  ✓  1 first test (1.0s)\n', nextOffset: 55 },
+        specJob({ output: '  ✓  2 second test (1.0s)\n  2 passed\n', nextOffset: 90 })
+      ]
+    })
+
+    await openSpecs(page)
+
+    await page.getByTestId('run-all-specs').click()
+
+    const log = page.getByTestId('spec-run-modal').getByRole('log')
+
+    await expect(log).toContainText('Running 2 tests using 1 worker')
+
+    await expect(log).toContainText('first test', { timeout: 8000 })
+
+    await expect(log.locator('[data-kind="pass"]').first()).toBeVisible()
+
+    // When the run finishes the modal flips to the Summary; the whole output (all increments) is still on the Output tab.
+    const modal = page.getByTestId('spec-run-modal')
+
+    await expect(modal.getByRole('heading', { name: 'Specs passed' })).toBeVisible({ timeout: 8000 })
+
+    await modal.getByRole('tab', { name: 'Output' }).click()
+
+    const full = modal.getByRole('log')
+
+    await expect(full).toContainText('Running 2 tests using 1 worker')
+
+    await expect(full).toContainText('first test')
+
+    await expect(full).toContainText('2 passed')
+  })
+
+  test('should lock the page while specs run (Back, merge, other play buttons) and unlock it afterwards', async ({ page }) => {
+    await mockApi(page, {
+      detail: prWithSpecs({ ticket: { ...reviewDetail().ticket, approval: 'approved' } }),
+      jobs: [runningJob('running'), runningJob('running'), specJob({ specs: [SPEC_A], results: [specResult(SPEC_A)] })]
+    })
+
+    await openSpecs(page)
+
+    await page.getByRole('button', { name: 'Run recurring_comments_completed.spec.ts' }).first().click()
+
+    await page.getByTestId('spec-run-modal').getByRole('button', { name: 'Close' }).last().click()
+
+    await expect(page.getByRole('button', { name: /Back to Review/ })).toBeDisabled()
+
+    await expect(page.getByTestId('run-all-specs')).toBeDisabled()
+
+    for (const button of await page.getByRole('button', { name: /^Run recurring/ }).all()) await expect(button).toBeDisabled()
+
+    await expect(page.getByRole('tab', { name: /^Specs/ }).getByLabel('Specs running')).toBeVisible()
+
+    await expect(page.getByRole('button', { name: /Back to Review/ })).toBeEnabled({ timeout: 10_000 })
+
+    await expect(page.getByTestId('run-all-specs')).toBeEnabled()
+  })
+
+  test('should cancel a run from the modal', async ({ page }) => {
+    const calls = await mockApi(page, {
+      detail: prWithSpecs(),
+      jobs: [runningJob('running'), specJob({ status: 'cancelled', results: null, output: 'started\n' })]
+    })
+
+    await openSpecs(page)
+
+    await page.getByTestId('run-all-specs').click()
+
+    await page.getByTestId('spec-run-modal').getByRole('button', { name: /Cancel run/ }).click()
+
+    await expect(page.getByTestId('spec-run-modal').getByTestId('run-banner')).toHaveAttribute('data-status', 'cancelled', { timeout: 10_000 })
+
+    await expect(page.getByTestId('spec-run-modal')).toContainText('Your checkout and test server files were restored.')
+
+    expect(calls.cancel).toBe(1)
+  })
+
+  test('should explain a run that could not finish, and that everything was cleaned up', async ({ page }) => {
+    await mockApi(page, {
+      detail: prWithSpecs(),
+      jobs: [specJob({ status: 'error', results: null, error: 'node_modules was not found in /Users/qa/Dev/securicy-app. Run `yarn install` there first.' })]
+    })
+
+    await openSpecs(page)
+
+    await page.getByTestId('run-all-specs').click()
+
+    const banner = page.getByTestId('spec-run-modal').getByTestId('run-banner')
+
+    await expect(banner).toHaveAttribute('data-status', 'error')
+
+    await expect(banner).toContainText('node_modules was not found')
+
+    await expect(banner).toContainText('Everything was cleaned up')
+  })
+
+  test('should show a refusal to start (server went down since the last check) without opening the modal', async ({ page }) => {
+    await mockApi(page, {
+      detail: prWithSpecs(),
+      testRun: fail(409, "The test server isn't running on 127.0.0.1:5017. Start it with `yarn test:server` in securicy-app, then try again.")
+    })
+
+    await openSpecs(page)
+
+    await page.getByTestId('run-all-specs').click()
+
+    await expect(page.getByTestId('specs-error')).toContainText('yarn test:server')
+
+    await expect(page.getByTestId('spec-run-modal')).toBeHidden()
+  })
+
+  test('should warn about changed server-side files that are not copied', async ({ page }) => {
+    await mockApi(page, { detail: prWithSpecs({ serverCodeChanged: ['spec/playwright/playwright/app_commands/x.rb'] }) })
+
+    await openSpecs(page)
+
+    await expect(page.getByTestId('server-code-warning')).toContainText('restart your test server from the PR branch')
+  })
+
+  test('should be usable on a phone-sized screen', async ({ page }) => {
+    await page.setViewportSize({ width: 375, height: 812 })
+
+    await mockApi(page, { detail: prWithSpecs(), jobs: [specJob({ status: 'failed', specs: [SPEC_A], results: [specResult(SPEC_A, 'failed')] })] })
+
+    await openSpecs(page)
+
+    const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)
+
+    expect(overflow).toBeLessThanOrEqual(0)
+
+    await page.getByTestId('run-all-specs').click()
+
+    await expect(page.getByTestId('spec-run-modal').getByTestId('run-banner')).toBeVisible()
+
+    const modalBox = await page.getByTestId('spec-run-modal').boundingBox()
+
+    expect(modalBox!.width).toBeLessThanOrEqual(375)
+  })
+})
+
+test.describe('Review - PRs that only change Playwright support files', () => {
+  const P = 'spec/playwright/playwright'
+
+  const supportOnly = (over = {}) =>
+    reviewDetail({
+      specs: [],
+      supportFiles: [`${P}/support/helpers.ts`, `${P}/pages/login_page.ts`, `${P}/fixtures/vcr_cassettes/tasks.yml`, 'spec/fixtures/users.yml'],
+      ...over
+    })
+
+  async function openSupportFiles(page: Page) {
+    await openFirstReview(page)
+
+    await page.getByRole('tab', { name: /^Support files/ }).click()
+
+    await expect(page.getByTestId('support-only-panel')).toBeVisible()
+  }
+
+  test('should label the tab "Support files (N)" and explain that there is nothing to run', async ({ page }) => {
+    await mockApi(page, { detail: supportOnly() })
+
+    await openSupportFiles(page)
+
+    await expect(page.getByRole('tab', { name: 'Support files (4)' })).toBeVisible()
+
+    await expect(page.getByRole('tab', { name: /^Specs/ })).toBeHidden()
+
+    await expect(page.getByRole('heading', { name: 'No specs in this PR' })).toBeVisible()
+  })
+
+  test('should group the changed files by what they are', async ({ page }) => {
+    await mockApi(page, { detail: supportOnly() })
+
+    await openSupportFiles(page)
+
+    await expect(page.getByTestId('support-group-helpers')).toContainText('Helpers and support code (1)')
+
+    await expect(page.getByTestId('support-group-pages')).toContainText('Page objects (1)')
+
+    await expect(page.getByTestId('support-group-fixtures')).toContainText('Fixtures (1)')
+
+    await expect(page.getByTestId('support-group-cassettes')).toContainText('VCR cassettes (1)')
+  })
+
+  test('should not offer to run anything, and should not touch the test server', async ({ page }) => {
+    const calls = await mockApi(page, { detail: supportOnly() })
+
+    await openSupportFiles(page)
+
+    await expect(page.getByTestId('run-all-specs')).toHaveCount(0)
+
+    await expect(page.getByTestId('test-server-badge')).toHaveCount(0)
+
+    await expect(page.getByRole('button', { name: /^Run / })).toHaveCount(0)
+
+    // Only the list page's own check; the detail view does not poll the server for a PR with nothing to run.
+    await page.waitForTimeout(500)
+
+    expect(calls.testServer).toBe(1)
+
+    expect(calls.run).toHaveLength(0)
+  })
+
+  test('should still be approvable and mergeable like any other PR', async ({ page }) => {
+    const calls = await mockApi(page, { detail: supportOnly() })
+
+    await openFirstReview(page)
+
+    await expect(mergeButton(page)).toBeDisabled()
+
+    await approveAndConfirm(page)
+
+    await expect(page.getByText('AT-727: 1 commit rebased and merged into playwright-main.')).toBeVisible()
+
+    expect(calls.merge).toHaveLength(1)
+  })
+
+  test('should warn when it also changes code that runs inside the test server', async ({ page }) => {
+    await mockApi(page, { detail: supportOnly({ serverCodeChanged: ['spec/e2e/app_commands/seed.rb'] }) })
+
+    await openSupportFiles(page)
+
+    await expect(page.getByTestId('server-code-warning')).toContainText('spec/e2e/app_commands/seed.rb')
+  })
+
+  test('should show a collapsed support-files note under the specs when a PR has both', async ({ page }) => {
+    await mockApi(page, { detail: supportOnly({ specs: [SPEC_A] }) })
+
+    await openFirstReview(page)
+
+    await page.getByRole('tab', { name: /^Specs/ }).click()
+
+    await expect(page.getByTestId('specs-panel')).toBeVisible()
+
+    await expect(page.getByTestId('support-only-panel')).toHaveCount(0)
+
+    const note = page.getByTestId('support-note')
+
+    await expect(note).not.toHaveAttribute('open', '')
+
+    await note.getByText(/This PR also changes 4 support files/).click()
+
+    await expect(note.getByTestId('support-group-cassettes')).toBeVisible()
+  })
+
+  test('should have no tab at all when a PR has neither specs nor support files', async ({ page }) => {
+    await mockApi(page)
+
+    await openFirstReview(page)
+
+    await expect(page.getByRole('tab', { name: /^Specs|^Support files/ })).toHaveCount(0)
+  })
+
+  test('should look right on a phone and in dark mode', async ({ page }) => {
+    await mockApi(page, { detail: supportOnly() })
+
+    await page.setViewportSize({ width: 375, height: 800 })
+
+    await page.emulateMedia({ colorScheme: 'dark' })
+
+    await openSupportFiles(page)
+
+    const overflow = await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth)
+
+    expect(overflow).toBe(false)
+
+    await expect(page.getByTestId('support-group-cassettes')).toBeVisible()
   })
 })
 
@@ -1128,7 +2041,78 @@ test.describe('Review - API guard rails', () => {
     expect(api.headers()['cross-origin-resource-policy']).toBe('same-origin')
   })
 
-  test('should only expose the five review routes', async ({ request }) => {
+  test('should refuse a decision for a non-AT branch or a malformed request, before anything runs', async ({ request }) => {
+    for (const body of [
+      { branch: 'master', expectedSha: 'abcdef1', decision: 'approved' },
+      { branch: 'APP-1-x', expectedSha: 'abcdef1', decision: 'approved' },
+      { branch: 'AT-12abc', expectedSha: 'abcdef1', decision: 'approved' },
+      { branch: 'AT-1-x', decision: 'approved' },
+      { branch: 'AT-1-x', expectedSha: 'abcdef1', decision: 'maybe' },
+      { branch: 'AT-1-x', expectedSha: 'abcdef1', decision: 'declined' },
+      { branch: 'AT-1-x', expectedSha: 'abcdef1', decision: 'approved', info: 'x'.repeat(5001) }
+    ]) {
+      const response = await request.post(`${BASE_URL}/api/review/decision`, { data: body })
+
+      expect(response.status(), JSON.stringify(body)).toBe(400)
+    }
+  })
+
+  test('should refuse cross-site and non-JSON decision, run and cancel requests', async ({ request }) => {
+    for (const route of ['decision', 'tests/run', 'tests/cancel']) {
+      const crossSite = await request.post(`${BASE_URL}/api/review/${route}`, {
+        headers: { 'Sec-Fetch-Site': 'cross-site' },
+        data: { branch: 'AT-1-x', expectedSha: 'abcdef1' }
+      })
+
+      expect(crossSite.status(), route).toBe(403)
+
+      const notJson = await request.post(`${BASE_URL}/api/review/${route}`, { headers: { 'Content-Type': 'text/plain' }, data: '{}' })
+
+      expect(notJson.status(), route).toBe(403)
+    }
+  })
+
+  test('should refuse to run specs that are not a plain spec file under the e2e folder, or for a non-AT branch', async ({ request }) => {
+    const e2e = 'spec/playwright/playwright/e2e'
+
+    for (const data of [
+      { branch: 'master', expectedSha: 'abcdef1', specs: 'all' },
+      { branch: 'AT-1-x', expectedSha: 'abcdef1', specs: [] },
+      { branch: 'AT-1-x', expectedSha: 'abcdef1', specs: ['spec/models/user_spec.rb'] },
+      { branch: 'AT-1-x', expectedSha: 'abcdef1', specs: [`${e2e}/../../../etc/passwd.spec.ts`] },
+      { branch: 'AT-1-x', expectedSha: 'abcdef1', specs: ['--ui'] },
+      { branch: 'AT-1-x', expectedSha: 'abcdef1', specs: `${e2e}/a.spec.ts` },
+      { branch: 'AT-1-x', specs: 'all' }
+    ]) {
+      const response = await request.post(`${BASE_URL}/api/review/tests/run`, { data })
+
+      expect(response.status(), JSON.stringify(data)).toBe(400)
+    }
+  })
+
+  test('should answer 404 for an unknown spec run and refuse cross-site reads of run output', async ({ request }) => {
+    const unknown = await request.get(`${BASE_URL}/api/review/tests/job?id=does-not-exist`)
+
+    expect(unknown.status()).toBe(404)
+
+    const crossSite = await request.get(`${BASE_URL}/api/review/tests/job?id=x`, { headers: { 'Sec-Fetch-Site': 'cross-site' } })
+
+    expect(crossSite.status()).toBe(403)
+  })
+
+  test('should report the test server status without starting anything', async ({ request }) => {
+    const response = await request.get(`${BASE_URL}/api/review/tests/status`)
+
+    expect(response.status()).toBe(200)
+
+    const { data } = await response.json()
+
+    expect(data).toMatchObject({ host: '127.0.0.1', startCommand: 'yarn test:server', activeJob: null })
+
+    expect(typeof data.up).toBe('boolean')
+  })
+
+  test('should only expose the review routes', async ({ request }) => {
     const unknown = await request.get(`${BASE_URL}/api/review/delete-branch`)
 
     expect(unknown.status()).toBe(404)

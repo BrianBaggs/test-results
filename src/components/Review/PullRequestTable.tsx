@@ -9,7 +9,7 @@ import type { ReviewBranch, ReviewTicket } from '@/types/review';
 const MERGED_COLOR = 'text-violet-600 dark:text-violet-400';
 
 /** `git diff --stat`-style summary: "3 files  +120 −4". */
-export const DiffStat: React.FC<{ branch: ReviewBranch }> = ({ branch }) => (
+const DiffStat: React.FC<{ branch: ReviewBranch }> = ({ branch }) => (
   <span className="inline-flex flex-wrap items-center gap-x-2 font-mono text-xs" data-testid="diff-stat">
     <span className="text-muted-foreground">{plural(branch.files, 'file')}</span>
     <span className="text-success">+{branch.additions}</span>
